@@ -2,6 +2,15 @@
 
 static void CHPUT(char c) __z88dk_fastcall;
 
+inline void wait_frame() {
+
+  	__asm
+  	ei
+    halt
+	__endasm;	
+}
+	
+
 static void asm_placeholder() __naked {
     
   	__asm
@@ -11,7 +20,7 @@ _CHPUT:
 	__endasm;	
 }
 
-static void puts(char *str) __z88dk_fastcall {
+static void puts(const char *str) __z88dk_fastcall {
 	
     while (*str) CHPUT(*str++);
 }
@@ -26,6 +35,8 @@ static void main_banked() {
 	static const char *hello_world_str_2 = " MSX World!\n";
 
     puts(hello_world_str_2);
+    
+    for (;;) wait_frame();
 }
 
 int main(void) __nonbanked { ML_EXECUTE_A(main, main_banked() ); return 0; }

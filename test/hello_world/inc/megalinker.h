@@ -45,24 +45,24 @@
 //
 
 #ifdef __SDCC
-    extern volatile uint8_t __ML_current_segment_a;
-    extern volatile uint8_t __ML_current_segment_b;
-    extern volatile uint8_t __ML_current_segment_c;
-    extern volatile uint8_t __ML_current_segment_d;
+    extern volatile uint8_t ML_current_segment_a;
+    extern volatile uint8_t ML_current_segment_b;
+    extern volatile uint8_t ML_current_segment_c;
+    extern volatile uint8_t ML_current_segment_d;
 
-    extern volatile uint8_t __ML_address_a;
-    extern volatile uint8_t __ML_address_b;
-    extern volatile uint8_t __ML_address_c;
-    extern volatile uint8_t __ML_address_d;
+    extern volatile uint8_t ML_address_a;
+    extern volatile uint8_t ML_address_b;
+    extern volatile uint8_t ML_address_c;
+    extern volatile uint8_t ML_address_d;
 
-	inline uint8_t __ML_LOAD_SEGMENT_A(uint8_t segment) { register uint8_t old = __ML_current_segment_a; __ML_address_a = __ML_current_segment_a = segment; return old; }
-	inline uint8_t __ML_LOAD_SEGMENT_B(uint8_t segment) { register uint8_t old = __ML_current_segment_b; __ML_address_b = __ML_current_segment_b = segment; return old; }
-	inline uint8_t __ML_LOAD_SEGMENT_C(uint8_t segment) { register uint8_t old = __ML_current_segment_c; __ML_address_c = __ML_current_segment_c = segment; return old; }
-	inline uint8_t __ML_LOAD_SEGMENT_D(uint8_t segment) { register uint8_t old = __ML_current_segment_d; __ML_address_d = __ML_current_segment_d = segment; return old; }
+	inline uint8_t __ML_LOAD_SEGMENT_A(uint8_t segment) { register uint8_t old = ML_current_segment_a; ML_address_a = ML_current_segment_a = segment; return old; }
+	inline uint8_t __ML_LOAD_SEGMENT_B(uint8_t segment) { register uint8_t old = ML_current_segment_b; ML_address_b = ML_current_segment_b = segment; return old; }
+	inline uint8_t __ML_LOAD_SEGMENT_C(uint8_t segment) { register uint8_t old = ML_current_segment_c; ML_address_c = ML_current_segment_c = segment; return old; }
+	inline uint8_t __ML_LOAD_SEGMENT_D(uint8_t segment) { register uint8_t old = ML_current_segment_d; ML_address_d = ML_current_segment_d = segment; return old; }
 
-	inline void __ML_RESTORE_A(uint8_t segment) { __ML_address_a = __ML_current_segment_a = segment; }
-	inline void __ML_RESTORE_B(uint8_t segment) { __ML_address_b = __ML_current_segment_b = segment; }
-	inline void __ML_RESTORE_C(uint8_t segment) { __ML_address_c = __ML_current_segment_c = segment; }
-	inline void __ML_RESTORE_D(uint8_t segment) { __ML_address_d = __ML_current_segment_d = segment; }
+	inline void __ML_RESTORE_A(uint8_t segment) { ML_address_a = ML_current_segment_a = segment; }
+	inline void __ML_RESTORE_B(uint8_t segment) { ML_address_b = ML_current_segment_b = segment; }
+	inline void __ML_RESTORE_C(uint8_t segment) { ML_address_c = ML_current_segment_c = segment; }
+	inline void __ML_RESTORE_D(uint8_t segment) { ML_address_d = ML_current_segment_d = segment; }
 
 #endif

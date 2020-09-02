@@ -1,5 +1,5 @@
 ////////////////////////////////////////////////////////////////////////
-// Linker for Konami 5 megaroms
+// Linker for MSX Megaroms
 //
 // Manuel Martinez (salutte@gmail.com)
 //
@@ -127,20 +127,32 @@ struct REL {
 
 	struct SYMBOL {
 
-        const std::string prefix = "_MAPPER_MODULE_";
-        const std::string postfix = "_PAGE_";
+        const std::string prefix = "___ML_";
         
-        bool isModuleSymbol() const { 
+        bool isMegalinkerSymbol() const { 
             
-            if (name.size() < prefix.size() + 1 + postfix.size() + 1) return false;
+            if (name.size() < prefix.size()) return false;
             if (name.substr(0,prefix.size()) != prefix) return false;
-            if (name.substr(name.size()-postfix.size()-1, postfix.size()) != postfix)  throw std::runtime_error("Module Symbol: " + name.substr(name.size()-postfix.size()-1, postfix.size()) + " has a wrong postfix");
-            if (name.back() < 'A' or name.back() > 'D') throw std::runtime_error("Module Symbol: " + name + " requires a wrong page");
+            return true;
+        }
+
+        bool isModuleAddressSymbol() const { 
+            
+            if (name.size() < prefix.size()+3) return false;
+            if (name.substr(0,prefix.size()) != prefix) return false;
+            if (name[prefix.size()+1]!='_') return false;
+            if (name[prefix.size()] < 'A' or name[prefix.size()] > 'D') throw std::runtime_error("Module Symbol: " + name + " requires a wrong page");
             return true;
         }
         
-        std::string moduleName() const { return name.substr(prefix.size(), name.size()-prefix.size()-postfix.size()-1); }
-        int page() const { return name.back()-'A'; }
+        std::string moduleName() const { 
+			if (not isModuleAddressSymbol()) throw std::runtime_error("Module Symbol: " + name + " is not a module address symbol");
+			return name.substr(prefix.size()+2); 
+		}
+        int page() const { 
+			if (not isModuleAddressSymbol()) throw std::runtime_error("Module Symbol: " + name + " is not a module address symbol");
+			return name[prefix.size()]-'A'; 
+		}
 		
 		std::string name;
 		uint32_t addr;
@@ -155,47 +167,9 @@ struct REL {
 	std::vector<SYMBOL> symbols;
 	
 	bool enabled = false;
-	int page = 0;
+	int page = -1;
 	int segment = 0;
 };
-
-
-////////////////////////////////////////////////////////////////////////
-// STRUCTURE:
-// MAIN BANKS: segments 0 and 1 are fixed to 0x4000 to 0x8000
-// CODE BANK: fixed to 0x8000 to 0xA000
-// DATA BANK: fixed to 0xA000 to 0xC000
-
-////////////////////////////////////////////////////////////////////////
-// BANKED CALL: 
-
-// CASE A: FROM CODE BANK TO MAIN BANK -> nothing special is needed
-// CASE C: FROM MAIN BANK TO CODE BANK -> load segment first, then normal call and return.
-// CASE D: FROM CODE BANK TO DIFFERENT CODE BANK -> unsupported.
-
-// HOW TO USE:
-// Place a "USING(moduleName)" statement in the prologue of the code, 
-// this defines an external symbol which will be used by the linker (prevents a warning).
-// 
-// The SEGMENT(moduleName) macro returns the segment where the moduleName is stored.
-// this macro actually compiles to a call to a phony name. THis call is intercepted
-// by the linker who knows where the module is placed.
-//
-// The load_code_segment(segment) function loads the segment at direction 0x8000, 
-// and returns the previous segment loaded at 0x8000.
-// The restore_code_segment(segment) loads the segment at direction 0x8000.
-
-
-////////////////////////////////////////////////////////////////////////
-// BANKED DATA ACCESS: 
-// Allows using data stored at 0xA000 to 0xC000 segment
-
-// HOW TO USE:
-// Use the USING macro, as with the code.
-//
-// The load_data_segment(segment) function loads the segment at direction 0xA000, 
-// and returns the previous segment loaded at 0xA000.
-// The restore_data_segment(segment) loads the segment at direction 0xA000.
 
 ////////////////////////////////////////////////////////////////////////
 
@@ -209,7 +183,16 @@ int main(int argc, char *argv[]) {
 			romName = std::string(argv[i]);
 	
 	
-	std::set<std::string> known_areas = { "_CODE", "_DATA", "_GSINIT", "_GSFINAL", "_HEADER0", "_HOME" };
+	std::set<std::string> known_areas = { 
+		"_HEADER0",     // Fixed to segment 0, contains megarom initialization
+		"_CODE",        // Banked code and const data
+		"_DATA",        // Ram that does not need initialization
+		"_GSINIT",      // Initialization code to be executed before calling main, sits in segment 0,
+		"_GSFINAL",     // After code is initialized, it only remains to call main,
+		"_INITIALIZED", // RAM that must be initialized
+		"_INITIALIZER", // Contents to initialize RAM, sits in segment 0
+		"_HOME"         // Non banked code that will be copied to RAM on initialization
+	};
 	std::vector<REL> rels;
 	
 	// PREPROCESS ALL INPUT FILES
@@ -256,7 +239,7 @@ int main(int argc, char *argv[]) {
 					symbol.type = REL::SYMBOL::DEF;
 				} else if (st=="Ref") {
 					symbol.type = REL::SYMBOL::REF;
-				} else throw std::runtime_error("Symbol type unepxepcted");
+				} else throw std::runtime_error("Symbol type unexpected");
 				
 				if (not rel.areas.empty())
 					symbol.areaName = rel.areas.back().name;
@@ -284,7 +267,6 @@ int main(int argc, char *argv[]) {
 				
 				if (area.name=="_HEADER0") {
 					rel.enabled=true;
-					rel.page=0;
 				}
 
 				rel.areas.push_back(area);
@@ -318,7 +300,7 @@ int main(int argc, char *argv[]) {
 			if (not rel.enabled) continue;
 			for (auto &sym : rel.symbols) {
 				if (sym.type!=REL::SYMBOL::REF) continue;
-				if (sym.isModuleSymbol()) {
+				if (sym.isModuleAddressSymbol()) {
 					for (auto &rel2 : rels) {
 						if (rel2.enabled) continue;
 						if (rel2.name != sym.moduleName()) continue;
@@ -327,6 +309,7 @@ int main(int argc, char *argv[]) {
 					}
 					continue;
 				}
+				if (sym.isMegalinkerSymbol()) continue;
 				referencedSymbols[sym.name] = 0;
 			}
 		}
@@ -356,6 +339,7 @@ int main(int argc, char *argv[]) {
 	}
 
 	
+	// PAGE ALLOCATION AND ERROR CHECKING
 	{
 		std::map<std::string,REL *> modulesByName;
 
@@ -370,12 +354,12 @@ int main(int argc, char *argv[]) {
 			if (not rel.enabled) continue;
 			for (auto &sym : rel.symbols) {
 				if (sym.type!=REL::SYMBOL::REF) continue; 
-				if (not sym.isModuleSymbol()) continue;
+				if (not sym.isModuleAddressSymbol()) continue;
 								
 				if (modulesByName.count(sym.moduleName())==0)
 					throw std::runtime_error("Module " + sym.moduleName() + " unknown");
 				
-				if (modulesByName[sym.moduleName()]->page==0)
+				if (modulesByName[sym.moduleName()]->page==-1)
 					modulesByName[sym.moduleName()]->page = sym.page();
 					
 				if (modulesByName[sym.moduleName()]->page != sym.page())
@@ -383,11 +367,12 @@ int main(int argc, char *argv[]) {
 			}
 		}
 
+		// TODO: Move this warning once we know that the symbol is required at not HOME section
 		for (auto &&rel : rels) {
 			if (not rel.enabled) continue;
 			for (auto &sym : rel.symbols) {
 				if (sym.type!=REL::SYMBOL::REF) continue; 
-				if (not sym.isModuleSymbol()) continue;
+				if (not sym.isModuleAddressSymbol()) continue;
 				
 				if (modulesByName[sym.moduleName()]->page == rel.page)
 					std::cerr << "Warning: Module " << rel.name << " is loading " << sym.moduleName() << " in its own page" << std::endl;
@@ -395,18 +380,46 @@ int main(int argc, char *argv[]) {
 		}
 	}
 	
+	std::map<std::string, uint32_t> megalinkerSymbols;
+	// FINDING ALL MEGALINKER DEFINED SYMBOLS
+	{
+		for (auto &&rel : rels) {
+			if (not rel.enabled) continue;
+			for (auto &sym : rel.symbols) {
+				if (sym.type!=REL::SYMBOL::DEF) continue;
+				if (not sym.isMegalinkerSymbol()) continue;
+				megalinkerSymbols[sym.name] = sym.addr;
+			}
+		}
+	}
+	uint32_t rom_ptr = -1;
+	uint32_t ram_ptr = -1;
+	if (megalinkerSymbols.count("___ML_RAM_START")==0) throw std::runtime_error("___ML_RAM_START not defined");
+	ram_ptr = megalinkerSymbols["___ML_RAM_START"];
+	
 	// ALLOCATE ALL NON BANKABLE AREAS
-	uint32_t rom_ptr = 0x4000;
-	uint32_t ram_ptr = 0xC000;
 	{
 		for (auto &rel : rels) {
 			if (not rel.enabled) continue;
 			for (auto &area:  rel.areas) {
 				if (area.name!="_HEADER0") continue;
-				if (rom_ptr>0x4000) throw std::runtime_error(area.name + " defined more than once: " + rel.filename);
+				if (rom_ptr!=uint32_t(-1)) throw std::runtime_error(area.name + " defined more than once: " + rel.filename);
 				if (area.type != REL::AREA::ABSOLUTE) throw std::runtime_error(area.name + " not absolute: " + rel.filename);
 				if (area.addr != 0x4000) throw std::runtime_error("HEADER not at 0x4000: " + rel.filename);
+	
+				rom_ptr = area.addr;
+				area.rom_addr = area.addr - 0x4000;
+				rom_ptr += area.size;
+			}
+		}
+		
+		for (auto &rel : rels) {
+			if (not rel.enabled) continue;
+			for (auto &area:  rel.areas) {
+				if (area.name!="_GSINIT") continue;
+				if (area.type != REL::AREA::RELATIVE) throw std::runtime_error(area.name + " not relative: " + rel.filename);
 
+				area.addr = rom_ptr;
 				area.rom_addr = area.addr - 0x4000;
 				rom_ptr += area.size;
 			}
@@ -414,30 +427,55 @@ int main(int argc, char *argv[]) {
 
 		for (auto &rel : rels) {
 			if (not rel.enabled) continue;
-			if (not rel.page==0) continue;
 			for (auto &area:  rel.areas) {
-				if (area.name!="_CODE" and area.name!="_HOME") continue;
+				if (area.name!="_GSFINAL") continue;
 				if (area.type != REL::AREA::RELATIVE) throw std::runtime_error(area.name + " not relative: " + rel.filename);
 
 				area.addr = rom_ptr;
 				area.rom_addr = area.addr - 0x4000;
 				rom_ptr += area.size;
-
-				Log(1) << "Placed: " << rel.name << " at: 0x" << std::hex << area.addr << std::dec << " (" << area.size << " bytes) in page: " << rel.page << " and segment: " << rel.segment;
 			}
 		}
 
-		for (auto &&target_area : std::vector<std::string>{"_GSINIT", "_GSFINAL"}) {
-			for (auto &rel : rels) {
-				if (not rel.enabled) continue;
-				for (auto &area:  rel.areas) {
-					if (area.name!=target_area) continue;
-					if (area.type != REL::AREA::RELATIVE) throw std::runtime_error(area.name + " not relative: " + rel.filename);
+		megalinkerSymbols["___ML_INIT_ROM_START"] = rom_ptr;
+		megalinkerSymbols["___ML_INIT_RAM_START"] = ram_ptr;
 
-					area.addr = rom_ptr;
-					area.rom_addr = area.addr - 0x4000;
-					rom_ptr += area.size;
-				}
+		for (auto &rel : rels) {
+			if (not rel.enabled) continue;
+			for (auto &area:  rel.areas) {
+				if (area.name!="_HOME") continue;
+				if (area.type != REL::AREA::RELATIVE) throw std::runtime_error(area.name + " not relative: " + rel.filename);
+
+				area.addr = ram_ptr;
+				area.rom_addr = rom_ptr - 0x4000;
+				rom_ptr += area.size;
+				ram_ptr += area.size;
+			}
+		}
+
+
+		for (auto &rel : rels) {
+			if (not rel.enabled) continue;
+			for (auto &area:  rel.areas) {
+				if (area.name!="_INITIALIZER") continue;
+				if (area.type != REL::AREA::RELATIVE) throw std::runtime_error(area.name + " not relative: " + rel.filename);
+
+				area.addr = rom_ptr;
+				area.rom_addr = area.addr - 0x4000;
+				rom_ptr += area.size;
+			}
+		}
+		megalinkerSymbols["___ML_INIT_SIZE"] = rom_ptr - megalinkerSymbols["___ML_INIT_ROM_START"];
+
+		for (auto &rel : rels) {
+			if (not rel.enabled) continue;
+			for (auto &area:  rel.areas) {
+				if (area.name!="_INITIALIZED") continue;
+				if (area.type != REL::AREA::RELATIVE) throw std::runtime_error(area.name + " not relative: " + rel.filename);
+
+				area.addr = ram_ptr;
+				area.rom_addr = uint32_t(-1);
+				ram_ptr += area.size;
 			}
 		}
 
@@ -448,7 +486,7 @@ int main(int argc, char *argv[]) {
 				if (area.type != REL::AREA::RELATIVE) throw std::runtime_error(area.name + " not relative: " + rel.filename);
 
 				area.addr = ram_ptr;
-				area.rom_addr = 0;
+				area.rom_addr = uint32_t(-1);
 				ram_ptr += area.size;
 			}
 		}		
@@ -460,9 +498,11 @@ int main(int argc, char *argv[]) {
 		
 		for (auto &rel : rels) {
 			if (not rel.enabled) continue;
-			if (not rel.page!=0) continue;
+//			if (not rel.page!=0) continue;
 			for (auto &area:  rel.areas) {
 				if (area.name!="_CODE") continue;
+				if (area.size==0) continue;
+				if (rel.page<0) throw std::runtime_error(rel.name + " used but not allocated a page");
 				if (area.type != REL::AREA::RELATIVE) throw std::runtime_error(area.name + " not relative: " + rel.filename);
 				
 				bankableRels.emplace_back(area.size,std::ref(rel));
@@ -478,8 +518,11 @@ int main(int argc, char *argv[]) {
 		std::reverse(bankableRels.begin(), bankableRels.end());
 
 		std::vector<uint32_t> segments;
-		segments.push_back(0x6000-rom_ptr);
-		
+		segments.push_back(std::max(0U, 0x6000-rom_ptr));
+		segments.push_back(std::max(0U, 0x8000-rom_ptr));
+		segments.push_back(std::max(0U, 0xA000-rom_ptr));
+		segments.push_back(std::max(0U, 0xC000-rom_ptr));
+				
 		for (auto &prel: bankableRels) {
 			uint32_t i;
 			for (i=0; i<segments.size() and segments[i]<prel.first; i++);
@@ -508,8 +551,8 @@ int main(int argc, char *argv[]) {
 	{
 		std::ofstream off(romName + ".areas.map");
 		off << "AREA MAP: " << std::endl;
-		off << "# SG #  MAP #  ROM  # SIZE #   NAME   #        PAGE A        #        PAGE B        #        PAGE C        #        PAGE D        #" << std::endl;
-		off << "###################################################################################################################################" << std::endl;
+		off << "# SG #  MAP #  ROM  # SIZE #   NAME   #        HEADER        #        PAGE A        #        PAGE B        #        PAGE C        #        PAGE D        #" << std::endl;
+		off << "##########################################################################################################################################################" << std::endl;
 		for (uint32_t i=0; i<256; i++) {
 			
 			std::multimap<uint32_t, std::string> lines;
@@ -519,14 +562,17 @@ int main(int argc, char *argv[]) {
 				if (not rel.enabled) continue;
 				for (auto &area:  rel.areas) {
 					if (area.size==0) continue;
-					if (area.name=="_DATA") continue;
 						
 					std::ostringstream oss;
 					
 					char s[200];
-					snprintf(s,199,"#%3X # %04X # %05X # %04X # %8.8s #",rel.segment, area.addr, area.rom_addr, area.size, area.name.substr(1).c_str());	
+					if (area.rom_addr==uint32_t(-1)) {
+						snprintf(s,199,"#%3X # %04X # ----- # %04X # %8.8s #",rel.segment, area.addr, area.size, area.name.substr(1).c_str());
+					} else {
+						snprintf(s,199,"#%3X # %04X # %05X # %04X # %8.8s #",rel.segment, area.addr, area.rom_addr, area.size, area.name.substr(1).c_str());
+					}
 					oss << s;
-					for (int j=0; j<rel.page; j++) oss << "                      #";
+					for (int j=-1; j<rel.page; j++) oss << "                      #";
 					snprintf(s,199," %20.20s #",rel.name.c_str());
 					oss << s;	
 					for (int j=rel.page+1; j<4; j++) oss << "                      #";
@@ -537,7 +583,7 @@ int main(int argc, char *argv[]) {
 			for (auto &&s : lines)
 				off << s.second << std::endl;
 			if (not lines.empty()) 
-				off << "###################################################################################################################################" << std::endl;
+				off << "##########################################################################################################################################################" << std::endl;
 
 		}
 	}
@@ -546,8 +592,8 @@ int main(int argc, char *argv[]) {
 	{
 		std::ofstream off(romName + ".symbols.map");
 		off << "Symbols MAP: " << std::endl;
-		off << "# SG #  MAP #  ROM  #  MODULE  #        PAGE A        #        PAGE B        #        PAGE C        #        PAGE D        #" << std::endl;
-		off << "############################################################################################################################" << std::endl;
+		off << "# SG #  MAP #  ROM  #  MODULE  #        HEADER        #        PAGE A        #        PAGE B        #        PAGE C        #        PAGE D        #" << std::endl;
+		off << "###################################################################################################################################################" << std::endl;
 		for (uint32_t i=0; i<256; i++) {
 			
 			std::multimap<uint32_t, std::string> lines;
@@ -557,7 +603,6 @@ int main(int argc, char *argv[]) {
 				if (not rel.enabled) continue;
 				for (auto &area:  rel.areas) {
 					if (area.size==0) continue;
-					if (area.name=="_DATA") continue;
 
 					for (auto &symbol : rel.symbols) {
 						if (symbol.type != REL::SYMBOL::DEF) continue;
@@ -566,9 +611,13 @@ int main(int argc, char *argv[]) {
 						std::ostringstream oss;
 						
 						char s[200];
-						snprintf(s,199,"#%3X # %04X # %05X # %-8.8s #",rel.segment, area.addr + symbol.addr, area.rom_addr + symbol.addr, rel.name.c_str());	
+						if (area.rom_addr==uint32_t(-1)) {
+							snprintf(s,199,"#%3X # %04X # ----- # %-8.8s #",rel.segment, area.addr + symbol.addr, rel.name.c_str());
+						} else {
+							snprintf(s,199,"#%3X # %04X # %05X # %-8.8s #",rel.segment, area.addr + symbol.addr, area.rom_addr + symbol.addr, rel.name.c_str());
+						}
 						oss << s;
-						for (int j=0; j<rel.page; j++) oss << "                      #";
+						for (int j=-1; j<rel.page; j++) oss << "                      #";
 						snprintf(s,199," %-20.20s #",symbol.name.c_str());
 						oss << s;	
 						for (int j=rel.page+1; j<4; j++) oss << "                      #";
@@ -580,16 +629,16 @@ int main(int argc, char *argv[]) {
 			for (auto &&s : lines)
 				off << s.second << std::endl;
 			if (not lines.empty()) 
-				off << "############################################################################################################################" << std::endl;
+				off << "###################################################################################################################################################" << std::endl;
 
 		}
 	}
 
 	Log(2) << "Allocated: " << (rom_ptr-0x4000) << " bytes of ROM";
-	if (rom_ptr>0x6000) throw std::runtime_error("Main segment ROM doesn't fit 8KB");
+	if (rom_ptr>0xC000) throw std::runtime_error("Main segment ROM doesn't fit 32KB");
 
-	Log(2) << "Allocated: " << (ram_ptr-0xC000) << " bytes of RAM";		
-	if (ram_ptr>0xF000) throw std::runtime_error("RAM usage is larger than 12KB");
+	Log(2) << "Allocated: " << (ram_ptr-megalinkerSymbols["___ML_RAM_START"]) << " bytes of RAM";		
+	if (ram_ptr>0xF000) throw std::runtime_error("Ram area dangerously close to stack.");
 	
 	// DO LABEL SYMBOL ADDRESSES
 	std::map<std::string,uint32_t> symbolsAddress;
@@ -621,6 +670,7 @@ int main(int argc, char *argv[]) {
 		std::vector<int> area_addr;
 		std::vector<int> area_rom_addr;
 		for (auto &area : rel.areas) {
+		//		std::cerr << rel.name << " " << area.name << " " << area.rom_addr << " " << area.size << std::endl;
 			if (area.type == REL::AREA::RELATIVE) {
 				area_addr.push_back(area.addr); 
 				area_rom_addr.push_back(area.rom_addr); 
@@ -652,7 +702,7 @@ int main(int argc, char *argv[]) {
 				
 				uint32_t xx0, xx1;
 				isl >> HEX(xx0,HEX::TWO_NIBBLES) >> HEX(xx1,HEX::TWO_NIBBLES);
-				last_t_pos = xx1*0x100 + xx0 + area_rom_addr[current_area];
+				last_t_pos = xx1*0x100 + xx0;
 				
 				T.clear();
 				uint32_t nn;
@@ -691,7 +741,7 @@ int main(int argc, char *argv[]) {
 						if (symbolsAddress.count(rel.symbols[idx].name)!=0)  {
 
 							address = symbolsAddress[rel.symbols[idx].name];
-						} else if (rel.symbols[idx].isModuleSymbol()) {
+						} else if (rel.symbols[idx].isModuleAddressSymbol()) {
 							
 							std::string requested_module = rel.symbols[idx].moduleName();
 							//Log(10) << "Looking for module: " << requested_module;
@@ -702,7 +752,11 @@ int main(int argc, char *argv[]) {
 								}
 							}
 						
+						} else if (rel.symbols[idx].isMegalinkerSymbol()) {
+						
+							address = megalinkerSymbols[rel.symbols[idx].name];
 						} else {
+						
 							throw std::runtime_error("Undefined symbol: " + rel.symbols[idx].name); 
 						}
 						
@@ -754,8 +808,10 @@ int main(int argc, char *argv[]) {
 				}	
 
 
+//				std::cerr << rel.name << " " << (last_t_pos +area_rom_addr[current_area]) << " " << T.size() << std::endl;
+
 				if (T.size())
-					while (rom.size() < last_t_pos + T.size()) 
+					while (rom.size() < last_t_pos + area_rom_addr[current_area] + T.size()) 
 						rom.resize(rom.size()+0x2000,0xff);
 				
 				//if (T.size()) Log(0) << rel.name << " " << std::hex << last_t_pos;
@@ -764,7 +820,7 @@ int main(int argc, char *argv[]) {
 					
 				
 //				for (auto &t : T) rom[last_t_pos++] = t;
-				for (auto &t : T) rom[last_t_pos++] = t;
+				for (auto &t : T) rom[area_rom_addr[current_area] + last_t_pos++] = t;
 
 			} else if (not type.empty()) {
 				
