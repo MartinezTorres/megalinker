@@ -162,7 +162,7 @@ struct REL {
 		uint32_t absoluteAddress;
 	};
 	
-	std::string filename, name;
+	std::string filename, name, content;
 	std::vector<AREA> areas;
 	std::vector<SYMBOL> symbols;
 	
@@ -175,39 +175,102 @@ struct REL {
 
 int main(int argc, char *argv[]) {
 	
-	Log::reportLevel(10);
-	
-	std::string romName = "out.rom";
-	for (int i=1; i<argc; i++) 
-		if (std::string(argv[i]).size()-std::string(argv[i]).find(".rom") == 4)
-			romName = std::string(argv[i]);
-	
+	Log::reportLevel(0);
 	
 	std::set<std::string> known_areas = { 
 		"_HEADER0",     // Fixed to segment 0, contains megarom initialization
 		"_CODE",        // Banked code and const data
 		"_DATA",        // Ram that does not need initialization
+		"_XDATA",       // External Ram that does not need initialization
 		"_GSINIT",      // Initialization code to be executed before calling main, sits in segment 0,
 		"_GSFINAL",     // After code is initialized, it only remains to call main,
 		"_INITIALIZED", // RAM that must be initialized
 		"_INITIALIZER", // Contents to initialize RAM, sits in segment 0
 		"_HOME"         // Non banked code that will be copied to RAM on initialization
 	};
+
+	std::string romName = "out.rom";
 	std::vector<REL> rels;
 	
 	// PREPROCESS ALL INPUT FILES
 	for (int i=1; i<argc; i++) {
 		
-		if (std::string(argv[i]).size()-std::string(argv[i]).find(".rel") != 4) continue;
-		Log(1) << "Processing: " << argv[i];
+		std::string arg = argv[i];
 		
-		std::ifstream isf(argv[i]);
+		if (arg.substr(arg.find_last_of(".")) == ".rom") {
+
+			Log(1) << "Rom name: " << arg;
+			romName = arg;
+			
+		} else if (arg.substr(arg.find_last_of(".")) == ".rel") {	
+			
+			Log(1) << "Processing: " << arg;
+			REL rel;
+			rel.filename = arg;
+			
+			std::ifstream isf(arg);
+			std::stringstream buffer;
+			buffer << isf.rdbuf();
+			rel.content = buffer.str();
+			
+			rels.push_back(rel);
+
+		} else if (arg.substr(arg.find_last_of(".")) == ".lib") {	
+
+			Log(1) << "Processing: " << arg;
+			std::ifstream isf(arg);
+			
+			std::string ar_signature = "!<arch>\n"; 
+			isf.read(&ar_signature[0],8); 
+			if (ar_signature != "!<arch>\n") throw std::runtime_error("Wrong signature in archive: " + arg);
+			
+			while (isf) {
+				std::string ar_file_name(16+1,0);
+				isf.read(&ar_file_name[0],16); 
+				
+				if (!isf) break;
+
+				std::string ar_buffer(12+6+6+8+1,0);
+				isf.read(&ar_buffer[0],12+6+6+8); 
+
+				std::string ar_size(10+1,0);
+				isf.read(&ar_size[0],10); 
+				std::istringstream issize(ar_size);
+				size_t ar_file_size;
+				issize >> ar_file_size;
+				
+				isf.read(&ar_buffer[0],2); 
+
+				Log(1) << "Found in archive: " << ar_file_name << "(" << ar_file_size << ")";
+
+				if (!isf) throw std::runtime_error("library terminates before reading full file");
+				
+				REL rel;
+				rel.filename = ar_file_name;
+				rel.content.resize(ar_file_size);
+				isf.read(&rel.content[0],ar_file_size); 
+
+				if (!isf) break;
+				if (!isf) throw std::runtime_error("library terminates before reading entire file");
+				
+				
+				if (rel.content.size()>10 and rel.content.substr(0,3)=="XL2") {
+					rels.push_back(rel);
+				} else {
+					Log(2) << "File " << ar_file_name << " not a relocatable object file";
+				} 
+				
+				if (ar_file_size % 2 == 1) isf.get(); // Align to 2
+			}
+		}
+	}
+	
+	for (auto &&rel : rels) {
+		
+		std::istringstream isf(rel.content);
 		std::string line;
-		
-		REL rel;
-		rel.filename = argv[i];
-		
-		Log(0) << " File: " << argv[i];
+
+		Log(2) << "File name: " << rel.filename; 
 		
 		while (std::getline(isf, line)) {
 			
@@ -215,15 +278,12 @@ int main(int argc, char *argv[]) {
 			std::string type;
 			isl >> type;
 
+
 			if (type=="XL2") { // DEFAULT
 			} else if (type=="M") { // NOT REQUIRED
 				
 				isl >> rel.name;
-				for (auto &r : rels)
-					if (r.name == rel.name)
-						throw std::runtime_error("Duplicate module ID: " + rel.name);
-				
-				//std::cout << "Module: " << rel.name << std::endl;
+				Log(1) << "Module name: " << rel.name << " (" << rel.filename << ")"; 
 				
 			} else if (type=="O") { // NOT NEEDED
 			} else if (type=="H") { // NOT NEEDED
@@ -254,6 +314,9 @@ int main(int argc, char *argv[]) {
 				isl >> area.name >> AR("size") >> HEX(area.size,HEX::PLAIN) 
 					>> AR("flags") >> flags 
 					>> AR("addr") >> HEX(area.addr,HEX::PLAIN);
+					
+				if (area.name.size()>0 and area.name[0]!='_')
+					area.name = '_' + area.name;
 				                
 				if (flags==0) {
 					area.type = REL::AREA::RELATIVE;
@@ -278,10 +341,6 @@ int main(int argc, char *argv[]) {
 				throw std::runtime_error("Unrecognized type: " + type);
 			}
 		}
-	
-		rels.push_back(rel);
-		if (rel.enabled)
-			std::swap(rels.front(),rels.back());
 	}
 
 	// FAST ERROR CHECKING
@@ -408,7 +467,7 @@ int main(int argc, char *argv[]) {
 				if (area.addr != 0x4000) throw std::runtime_error("HEADER not at 0x4000: " + rel.filename);
 	
 				rom_ptr = area.addr;
-				area.rom_addr = area.addr - 0x4000;
+				area.rom_addr = area.addr;
 				rom_ptr += area.size;
 			}
 		}
@@ -420,7 +479,7 @@ int main(int argc, char *argv[]) {
 				if (area.type != REL::AREA::RELATIVE) throw std::runtime_error(area.name + " not relative: " + rel.filename);
 
 				area.addr = rom_ptr;
-				area.rom_addr = area.addr - 0x4000;
+				area.rom_addr = area.addr;
 				rom_ptr += area.size;
 			}
 		}
@@ -432,7 +491,7 @@ int main(int argc, char *argv[]) {
 				if (area.type != REL::AREA::RELATIVE) throw std::runtime_error(area.name + " not relative: " + rel.filename);
 
 				area.addr = rom_ptr;
-				area.rom_addr = area.addr - 0x4000;
+				area.rom_addr = area.addr;
 				rom_ptr += area.size;
 			}
 		}
@@ -447,7 +506,7 @@ int main(int argc, char *argv[]) {
 				if (area.type != REL::AREA::RELATIVE) throw std::runtime_error(area.name + " not relative: " + rel.filename);
 
 				area.addr = ram_ptr;
-				area.rom_addr = rom_ptr - 0x4000;
+				area.rom_addr = rom_ptr;
 				rom_ptr += area.size;
 				ram_ptr += area.size;
 			}
@@ -461,7 +520,7 @@ int main(int argc, char *argv[]) {
 				if (area.type != REL::AREA::RELATIVE) throw std::runtime_error(area.name + " not relative: " + rel.filename);
 
 				area.addr = rom_ptr;
-				area.rom_addr = area.addr - 0x4000;
+				area.rom_addr = area.addr;
 				rom_ptr += area.size;
 			}
 		}
@@ -483,6 +542,18 @@ int main(int argc, char *argv[]) {
 			if (not rel.enabled) continue;
 			for (auto &area:  rel.areas) {
 				if (area.name!="_DATA") continue;
+				if (area.type != REL::AREA::RELATIVE) throw std::runtime_error(area.name + " not relative: " + rel.filename);
+
+				area.addr = ram_ptr;
+				area.rom_addr = uint32_t(-1);
+				ram_ptr += area.size;
+			}
+		}		
+
+		for (auto &rel : rels) {
+			if (not rel.enabled) continue;
+			for (auto &area:  rel.areas) {
+				if (area.name!="_XDATA") continue;
 				if (area.type != REL::AREA::RELATIVE) throw std::runtime_error(area.name + " not relative: " + rel.filename);
 
 				area.addr = ram_ptr;
@@ -532,7 +603,7 @@ int main(int argc, char *argv[]) {
 			for (auto &a : prel.second.get().areas) {
 				if (a.name=="_CODE") {
 					a.addr = 0x2000*(2+prel.second.get().page) + 0x2000 - segments[i]; 
-					a.rom_addr = 0x2000*i + 0x2000-segments[i];
+					a.rom_addr = 0x2000*(2+i) + 0x2000 - segments[i];
 				}
 			}
 			
@@ -678,7 +749,7 @@ int main(int argc, char *argv[]) {
 				if (area.size)
 					Log(3) << "Module: " << rel.name << " Area: " << area.name << " " << area.addr << " " << area.rom_addr;
 				area_addr.push_back(0);
-				area_rom_addr.push_back(-0x4000);
+				area_rom_addr.push_back(0);
 			}
 		}
 			
@@ -811,7 +882,7 @@ int main(int argc, char *argv[]) {
 //				std::cerr << rel.name << " " << (last_t_pos +area_rom_addr[current_area]) << " " << T.size() << std::endl;
 
 				if (T.size())
-					while (rom.size() < last_t_pos + area_rom_addr[current_area] + T.size()) 
+					while (rom.size() < last_t_pos + area_rom_addr[current_area] - 0x4000 + T.size()) 
 						rom.resize(rom.size()+0x2000,0xff);
 				
 				//if (T.size()) Log(0) << rel.name << " " << std::hex << last_t_pos;
@@ -820,7 +891,7 @@ int main(int argc, char *argv[]) {
 					
 				
 //				for (auto &t : T) rom[last_t_pos++] = t;
-				for (auto &t : T) rom[area_rom_addr[current_area] + last_t_pos++] = t;
+				for (auto &t : T) rom[area_rom_addr[current_area] - 0x4000 + last_t_pos++] = t;
 
 			} else if (not type.empty()) {
 				
