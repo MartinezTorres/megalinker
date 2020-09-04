@@ -31,7 +31,7 @@ commonly used snippets.
 
 ### Usage rules
 
-From | Target symbol | How
+From | Target symbol | Usage
 -----|---------------|----
 __nonbanked | __nonbanked | always allowed
 __nonbanked | __banked | must load target module first
@@ -56,9 +56,9 @@ Both files can be modified to address specific needs.
 
 The suggested API is the following:
 
-Macro | Use
+Macro | Usage
 ---------|-----
-`ML_SEGMENT_X(module)` | linker time constant that can 
+`ML_SEGMENT_X(module)` | linker time constant that represents the segment where a module resides. 
 `ML_LOAD_SEGMENT_X(segment)` | loads a segment in page X, returns the previously loaded segment in that page.
 `ML_LOAD_MODULE_X(module)` | loads a module in page X, returns the previously loaded segment in that page.
 `ML_RESTORE_X(segment)` | loads the segment in page X.
@@ -67,7 +67,7 @@ Macro | Use
 `ML_REQUEST_X(module)` | is a declaration that must be used prior to use a module.
 
 Notes:
-`ML_LOAD_MODULE_X(module)` is equivalent to `ML_LOAD_SEGMENT_X(ML_SEGMENT_X(module))`
+`ML_LOAD_MODULE_X(module)`{:.C} is equivalent to `ML_LOAD_SEGMENT_X(ML_SEGMENT_X(module))`
 `ML_EXECUTE_X(module, code)` is equivalent to:
 ```C
 do {
