@@ -127,7 +127,8 @@ struct REL {
 
 	struct SYMBOL {
 
-        const std::string prefix = "___ML_";
+        constexpr std::string prefix = "___ML_";
+        constexpr std::string prefix_append = "___ML_APPEND_";
         
         bool isMegalinkerSymbol() const { 
             
@@ -143,6 +144,28 @@ struct REL {
             if (name[prefix.size()+1]!='_') return false;
             if (name[prefix.size()] < 'A' or name[prefix.size()] > 'D') throw std::runtime_error("Module Symbol: " + name + " requires a wrong page");
             return true;
+        }
+
+        bool isModuleAppendSymbol() const { 
+            
+            if (name.size() < prefix_append.size()) return false;
+            if (name.substr(0,prefix_append.size()) != prefix_append) return false;
+
+			if (name.find("_TO_") == std::string::npos) throw std::runtime_error("Module Symbol: " + name + " is not a module append symbol");
+
+            return true;
+        }
+
+        std::string moduleAppendSource() const { 
+
+			if (not isModuleAppendSymbol()) throw std::runtime_error("Module Symbol: " + name + " is not a module append symbol");						
+			return name.substr(prefix_append.size(), name.find("_TO_") - prefix_append.size()); 
+        }
+
+        std::string moduleAppendTarget() const { 
+
+			if (not isModuleAppendSymbol()) throw std::runtime_error("Module Symbol: " + name + " is not a module append symbol");
+			return name.substr(name.find("_TO_")+4);
         }
         
         std::string moduleName() const { 
@@ -265,12 +288,26 @@ int main(int argc, char *argv[]) {
 		}
 	}
 	
+
+	// FAST ERROR CHECKING
+	if (rels.empty()) throw std::runtime_error("No files to parse");
+	
+	// PREPROCESS ALL RELS
 	for (auto &&rel : rels) {
 		
 		std::istringstream isf(rel.content);
 		std::string line;
 
-		Log(2) << "File name: " << rel.filename; 
+		rel.name = "";
+		if (rel.filename.find(".rel")!=std::string::npos) {
+			rel.name = rel.filename.substr(0,rel.filename.find(".rel"));
+			for (auto &&c : rel.name) 
+				if (c=='.') 
+					c='_';
+		}
+
+		Log(2) << "File name: " << rel.filename << " (" << rel.name << ")"; 
+			
 		
 		while (std::getline(isf, line)) {
 			
@@ -305,6 +342,11 @@ int main(int argc, char *argv[]) {
 					symbol.areaName = rel.areas.back().name;
 				
 				rel.symbols.push_back(symbol);
+				
+				if (rel.name.empty() and symbol.type == REL::SYMBOL::DEF and symbol.name.size()>1 and symbol.name[0]=='_') {
+					rel.name = symbol.name.substr(1);
+					Log(1) << "Rel named after symbol" << rel.name << " (" << rel.filename << ")"; 
+				}
 				
 			} else if (type=="A") {
 				
@@ -341,11 +383,32 @@ int main(int argc, char *argv[]) {
 				throw std::runtime_error("Unrecognized type: " + type);
 			}
 		}
-	}
-
-	// FAST ERROR CHECKING
-	if (rels.empty()) throw std::runtime_error("No files to parse");
 	
+		if (rel.name.empty()) throw std::runtime_error("Module not given a name" + rel.filename);
+		// CHECK FOR DUPLICATE NAMES
+	}
+	
+
+	// JOIN ALL APPENDED MODULES
+	{
+		std::map<std::string, std::string > append_directives;
+
+		for (auto &rel : rels) {
+			for (auto &sym : rel.symbols) {
+				if (sym.type!=REL::SYMBOL::DEF) continue;
+				if (not sym.isModuleAppendSymbol()) continue;
+				append_directives[sym.moduleAppendSource()] = sym.moduleAppendTarget(); 
+			}
+		}
+
+		for (auto &rel : rels) {
+			if (append_directives.count(rel.name)) {
+				
+			}
+		
+		
+		
+	}
 	
 	// ENABLE ALL REQUIRED FILES / MODULES
 	for (;;) {
