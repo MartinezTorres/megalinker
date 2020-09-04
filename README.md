@@ -67,7 +67,7 @@ Macro | Usage
 `ML_REQUEST_X(module)` | is a declaration that must be used prior to use a module.
 
 Notes:
-`ML_LOAD_MODULE_X(module)`{:.C} is equivalent to `ML_LOAD_SEGMENT_X(ML_SEGMENT_X(module))`
+`ML_LOAD_MODULE_X(module)` is equivalent to `ML_LOAD_SEGMENT_X(ML_SEGMENT_X(module))`
 `ML_EXECUTE_X(module, code)` is equivalent to:
 ```C
 do {
