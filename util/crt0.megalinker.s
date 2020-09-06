@@ -5,20 +5,20 @@
 
 .globl  _main
 
-.globl  ___ML_RAM_START
+.globl  ___ML_CONFIG_RAM_START
 
-.globl  ___ML_INIT_ROM_START
-.globl  ___ML_INIT_RAM_START
-.globl  ___ML_INIT_SIZE
+.globl  ___ML_CONFIG_INIT_ROM_START
+.globl  ___ML_CONFIG_INIT_RAM_START
+.globl  ___ML_CONFIG_INIT_SIZE
 
-.globl  _ML_current_segment_a
-.globl  _ML_current_segment_b
-.globl  _ML_current_segment_c
-.globl  _ML_current_segment_d
-.globl  _ML_address_d
-.globl  _ML_address_c
-.globl  _ML_address_b
-.globl  _ML_address_a
+.globl  ___ML_current_segment_a
+.globl  ___ML_current_segment_b
+.globl  ___ML_current_segment_c
+.globl  ___ML_current_segment_d
+.globl  ___ML_address_d
+.globl  ___ML_address_c
+.globl  ___ML_address_b
+.globl  ___ML_address_a
 
 
 
@@ -44,19 +44,19 @@ HTIMI = 0xFD9F
 ; DATA
 ;--------------------------------------------------------
 .area _DATA
-___ML_RAM_START =   0xC000
+___ML_CONFIG_RAM_START =   0xC000
 
-_ML_address_a =   0x5000
-_ML_address_b =   0x7000
-_ML_address_c =   0x9000
-_ML_address_d =   0xb000
-_ML_current_segment_a::
+___ML_address_a =   0x5000
+___ML_address_b =   0x7000
+___ML_address_c =   0x9000
+___ML_address_d =   0xb000
+___ML_current_segment_a::
     .ds 1
-_ML_current_segment_b::
+___ML_current_segment_b::
     .ds 1
-_ML_current_segment_c::
+___ML_current_segment_c::
     .ds 1
-_ML_current_segment_d::
+___ML_current_segment_d::
     .ds 1
 
 ;--------------------------------------------------------
@@ -85,21 +85,21 @@ init:
 
 ;   We initialize the mapper repeatedly, to trigger correctly megaflashrom and openmsx mapper detection.
     xor a
-    ld  (_ML_current_segment_a),a
-    ld  (_ML_address_a),a
-    ld  (_ML_address_a),a
+    ld  (___ML_current_segment_a),a
+    ld  (___ML_address_a),a
+    ld  (___ML_address_a),a
     inc a
-    ld  (_ML_current_segment_b),a
-    ld  (_ML_address_b),a
-    ld  (_ML_address_b),a
+    ld  (___ML_current_segment_b),a
+    ld  (___ML_address_b),a
+    ld  (___ML_address_b),a
     inc a
-    ld  (_ML_current_segment_c),a
-    ld  (_ML_address_c),a
-    ld  (_ML_address_c),a
+    ld  (___ML_current_segment_c),a
+    ld  (___ML_address_c),a
+    ld  (___ML_address_c),a
     inc a
-    ld  (_ML_current_segment_d),a
-    ld  (_ML_address_d),a
-    ld  (_ML_address_d),a
+    ld  (___ML_current_segment_d),a
+    ld  (___ML_address_d),a
+    ld  (___ML_address_d),a
 
 ;   Sets the stack at the top of the memory.
     ld sp,(0xfc4a)
@@ -133,9 +133,9 @@ init:
     di
     
 ;   copies intial values to RAM
-    ld de, #___ML_INIT_RAM_START
-    ld hl, #___ML_INIT_ROM_START
-    ld bc, #___ML_INIT_SIZE
+    ld de, #___ML_CONFIG_INIT_RAM_START
+    ld hl, #___ML_CONFIG_INIT_ROM_START
+    ld bc, #___ML_CONFIG_INIT_SIZE
 	ldir
     
 .area _NONE

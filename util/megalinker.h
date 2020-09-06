@@ -11,15 +11,15 @@
 
 #define ML_MOVE_SYMBOLS_TO(target_module, source_module) const uint8_t __at 0x0000 __ML_MOVE_SYMBOLS_ ## source_module ## _TO_ ## target_module
 
-#define ML_REQUEST_A(module) extern const uint8_t __ML_A_## module
-#define ML_REQUEST_B(module) extern const uint8_t __ML_B_## module
-#define ML_REQUEST_C(module) extern const uint8_t __ML_C_## module
-#define ML_REQUEST_D(module) extern const uint8_t __ML_D_## module
+#define ML_REQUEST_A(module) extern const uint8_t __ML_SEGMENT_A_## module
+#define ML_REQUEST_B(module) extern const uint8_t __ML_SEGMENT_B_## module
+#define ML_REQUEST_C(module) extern const uint8_t __ML_SEGMENT_C_## module
+#define ML_REQUEST_D(module) extern const uint8_t __ML_SEGMENT_D_## module
 
-#define ML_SEGMENT_A(module) ((const uint8_t)&__ML_A_ ## module)
-#define ML_SEGMENT_B(module) ((const uint8_t)&__ML_B_ ## module)
-#define ML_SEGMENT_C(module) ((const uint8_t)&__ML_C_ ## module)
-#define ML_SEGMENT_D(module) ((const uint8_t)&__ML_D_ ## module)
+#define ML_SEGMENT_A(module) ((const uint8_t)&__ML_SEGMENT_A_ ## module)
+#define ML_SEGMENT_B(module) ((const uint8_t)&__ML_SEGMENT_B_ ## module)
+#define ML_SEGMENT_C(module) ((const uint8_t)&__ML_SEGMENT_C_ ## module)
+#define ML_SEGMENT_D(module) ((const uint8_t)&__ML_SEGMENT_D_ ## module)
 
 #define ML_LOAD_SEGMENT_A(segment) __ML_LOAD_SEGMENT_A(segment);
 #define ML_LOAD_SEGMENT_B(segment) __ML_LOAD_SEGMENT_B(segment);

@@ -112,10 +112,9 @@ struct HEX { //READ HEXADECIMAL VALUE
 
 struct HEX2 : public HEX { HEX2(uint32_t &value) : HEX(value, HEX::TWO_NIBBLES) {} };
 
-struct REL {
+struct Module {
 	
-	
-	struct AREA {
+	struct Area {
 		
 		std::string name;
 		uint32_t size;
@@ -125,58 +124,65 @@ struct REL {
 		
 	};
 
-	struct SYMBOL {
+	struct Symbol {
 
-        constexpr std::string prefix = "___ML_";
-        constexpr std::string prefix_append = "___ML_APPEND_";
-        
-        bool isMegalinkerSymbol() const { 
+		// Configuration Symbol
+        const std::string prefix_configuration = "___ML_CONFIG_";
+        bool isConfigurationSymbol() const { 
             
-            if (name.size() < prefix.size()) return false;
-            if (name.substr(0,prefix.size()) != prefix) return false;
+            if (name.substr(0,prefix_configuration.size()) != prefix_configuration) return false;
             return true;
         }
 
-        bool isModuleAddressSymbol() const { 
+		// Module Segment Symbol
+        const std::string prefix_segment = "___ML_SEGMENT_";
+        bool isSegmentSymbol() const { 
             
-            if (name.size() < prefix.size()+3) return false;
-            if (name.substr(0,prefix.size()) != prefix) return false;
-            if (name[prefix.size()+1]!='_') return false;
-            if (name[prefix.size()] < 'A' or name[prefix.size()] > 'D') throw std::runtime_error("Module Symbol: " + name + " requires a wrong page");
+            if (name.substr(0,prefix_segment.size()) != prefix_segment) return false;
+            if (type == DEF) throw std::runtime_error("A program should not define a Megalinker Segment Symbol: " + name);
+            
+            if (name.size() < prefix_segment.size()+2) throw std::runtime_error("Short Megalinker Segment Symbol: " + name);
+            if (name[prefix_segment.size()+1]!='_') throw std::runtime_error("Malformed Megalinker Segment Symbol: " + name);
+            if (name[prefix_segment.size()] < 'A' or name[prefix_segment.size()] > 'D') throw std::runtime_error("Module Symbol: " + name + " requires a wrong page");
             return true;
         }
 
-        bool isModuleAppendSymbol() const { 
+        std::string getSegmentName() const { 
+			if (not isSegmentSymbol()) throw std::runtime_error("Megalinker Symbol: " + name + " is not a segment symbol");
+			return name.substr(prefix_segment.size()+2); 
+		}
+		
+        int getSegmentPage() const { 
+			if (not isSegmentSymbol()) throw std::runtime_error("Megalinker Symbol: " + name + " is not a segment symbol");
+			return name[prefix_segment.size()]-'A'; 
+		}
+
+		// Move Symbols Symbol
+        const std::string prefix_move = "___ML_MOVE_SYMBOLS_";
+        bool isMoveSymbol() const { 
             
-            if (name.size() < prefix_append.size()) return false;
-            if (name.substr(0,prefix_append.size()) != prefix_append) return false;
+            if (name.substr( 0, prefix_move.size()) != prefix_move) return false;
+            if (type == REF) throw std::runtime_error("A program should not refer to a Megalinker Segment Symbol: " + name);
 
-			if (name.find("_TO_") == std::string::npos) throw std::runtime_error("Module Symbol: " + name + " is not a module append symbol");
-
+			size_t pos = name.find("_TO_");
+			if (pos == std::string::npos) throw std::runtime_error("Move Symbol: " + name + " has no _TO_ tokens");
+			if (name.find("_TO_",pos+1) != std::string::npos) throw std::runtime_error("Move Symbol: " + name + " has more than one _TO_ tokens");
+			
             return true;
         }
 
-        std::string moduleAppendSource() const { 
+        std::string getMoveTarget() const { 
 
-			if (not isModuleAppendSymbol()) throw std::runtime_error("Module Symbol: " + name + " is not a module append symbol");						
-			return name.substr(prefix_append.size(), name.find("_TO_") - prefix_append.size()); 
+			if (not isMoveSymbol()) throw std::runtime_error("Module Symbol: " + name + " is not a module append symbol");						
+			return name.substr(prefix_move.size(), name.find("_TO_") - prefix_move.size()); 
         }
 
-        std::string moduleAppendTarget() const { 
+        std::string getMoveSource() const { 
 
-			if (not isModuleAppendSymbol()) throw std::runtime_error("Module Symbol: " + name + " is not a module append symbol");
+			if (not isMoveSymbol()) throw std::runtime_error("Module Symbol: " + name + " is not a module append symbol");						
 			return name.substr(name.find("_TO_")+4);
         }
         
-        std::string moduleName() const { 
-			if (not isModuleAddressSymbol()) throw std::runtime_error("Module Symbol: " + name + " is not a module address symbol");
-			return name.substr(prefix.size()+2); 
-		}
-        int page() const { 
-			if (not isModuleAddressSymbol()) throw std::runtime_error("Module Symbol: " + name + " is not a module address symbol");
-			return name[prefix.size()]-'A'; 
-		}
-		
 		std::string name;
 		uint32_t addr;
 		enum { DEF, REF} type;
@@ -186,21 +192,19 @@ struct REL {
 	};
 	
 	std::string filename, name, content;
-	std::vector<AREA> areas;
-	std::vector<SYMBOL> symbols;
+	std::vector<Area> areas;
+	std::vector<Symbol> symbols;
 	
 	bool enabled = false;
 	int page = -1;
 	int segment = 0;
 };
 
-////////////////////////////////////////////////////////////////////////
+// preprocessModule makes a 1st pass scan through the REL file of a module.
+// It determines the module name, its symbols, and its areas.
+void preprocessModule(Module &module) {
 
-int main(int argc, char *argv[]) {
-	
-	Log::reportLevel(0);
-	
-	std::set<std::string> known_areas = { 
+	const std::set<std::string> known_areas = { 
 		"_HEADER0",     // Fixed to segment 0, contains megarom initialization
 		"_CODE",        // Banked code and const data
 		"_DATA",        // Ram that does not need initialization
@@ -211,9 +215,108 @@ int main(int argc, char *argv[]) {
 		"_INITIALIZER", // Contents to initialize RAM, sits in segment 0
 		"_HOME"         // Non banked code that will be copied to RAM on initialization
 	};
+	
+	std::istringstream isf(module.content);
+	std::string line;
 
+	module.name = "";
+	// If the module comes from a rel file, the module name defaults to the filename.
+	if (module.filename.find(".rel") != std::string::npos) {
+		module.name = module.filename.substr(0, module.filename.find(".rel"));
+		for (auto &&c : module.name) 
+			if (c=='.') 
+				c='_';
+	}
+
+	Log(2) << "File name: " << module.filename << " (" << module.name << ")"; 
+		
+	
+	while (std::getline(isf, line)) {
+		
+		std::istringstream isl(line);
+		std::string type;
+		isl >> type;
+
+		if (type=="XL2") { // HEADER
+		} else if (type=="M") {
+			
+			// The module name is implicitly declared.
+			isl >> module.name;
+			Log(1) << "Module name: " << module.name << " (" << module.filename << ")"; 
+			
+		} else if (type=="O") { // NOT NEEDED
+		} else if (type=="H") { // NOT NEEDED
+		} else if (type=="S") {
+			
+			Module::Symbol symbol;
+			std::string st = "   ";
+			
+			isl >> symbol.name >> st[0] >> st[1] >> st[2] >> HEX(symbol.addr, HEX::PLAIN);
+			
+				
+			if (st=="Def") {
+				symbol.type = Module::Symbol::DEF;
+			} else if (st=="Ref") {
+				symbol.type = Module::Symbol::REF;
+			} else throw std::runtime_error("Symbol type unexpected");
+			
+			if (not module.areas.empty())
+				symbol.areaName = module.areas.back().name;
+			
+			module.symbols.push_back(symbol);
+			
+			if (module.name.empty() and symbol.type == Module::Symbol::DEF and symbol.name.size()>1 and symbol.name[0]=='_') {
+				module.name = symbol.name.substr(1);
+				Log(1) << "Rel named after symbol" << module.name << " (" << module.filename << ")"; 
+			}
+			
+		} else if (type=="A") {
+			
+			Module::Area area;
+			
+			uint32_t flags;
+			isl >> area.name >> AR("size") >> HEX(area.size,HEX::PLAIN) 
+				>> AR("flags") >> flags 
+				>> AR("addr") >> HEX(area.addr,HEX::PLAIN);
+				
+			if (area.name.size()>0 and area.name[0]!='_')
+				area.name = '_' + area.name;
+							
+			if (flags==0) {
+				area.type = Module::Area::RELATIVE;
+			} else if (flags==8) {
+				area.type = Module::Area::ABSOLUTE;
+			} else throw std::runtime_error("Unexpected flag");
+			
+			
+			if (area.size>0) Log(1) << "Found area: " << area.name << " of size: " << area.size;
+			if (area.size>0 and known_areas.count(area.name) == 0) throw std::runtime_error("Area " + area.name +" unknown");
+			
+			// NOTE: if the _HEADER0 area is defined, the module must be enabled. Other modules will be enabled on demand.
+			if (area.name=="_HEADER0") module.enabled=true;
+
+			module.areas.push_back(area);
+			
+		} else if (type=="T") { // NOT NOW
+		} else if (type=="R") { // NOT NOW
+		} else if (not type.empty()) {
+			
+			throw std::runtime_error("Unrecognized type: " + type);
+		}
+	}
+
+	if (module.name.empty()) throw std::runtime_error("Module not given a name, and we could not determine a name for it: " + module.filename);
+}
+
+
+////////////////////////////////////////////////////////////////////////
+
+int main(int argc, char *argv[]) {
+	
+	Log::reportLevel(0);
+	
 	std::string romName = "out.rom";
-	std::vector<REL> rels;
+	std::map<std::string, std::vector<Module>> modules;
 	
 	// PREPROCESS ALL INPUT FILES
 	for (int i=1; i<argc; i++) {
@@ -228,15 +331,17 @@ int main(int argc, char *argv[]) {
 		} else if (arg.substr(arg.find_last_of(".")) == ".rel") {	
 			
 			Log(1) << "Processing: " << arg;
-			REL rel;
-			rel.filename = arg;
+			Module module;
+			module.filename = arg;
 			
 			std::ifstream isf(arg);
 			std::stringstream buffer;
 			buffer << isf.rdbuf();
-			rel.content = buffer.str();
+			module.content = buffer.str();
 			
-			rels.push_back(rel);
+			preprocessModule(module);
+			if (modules.count(module.name)) throw std::runtime_error("File " + arg + " declares a module already defined in: " + modules[module.name].front().filename);
+			modules[module.name].push_back(module);
 
 		} else if (arg.substr(arg.find_last_of(".")) == ".lib") {	
 
@@ -268,18 +373,23 @@ int main(int argc, char *argv[]) {
 
 				if (!isf) throw std::runtime_error("library terminates before reading full file");
 				
-				REL rel;
-				rel.filename = ar_file_name;
-				rel.content.resize(ar_file_size);
-				isf.read(&rel.content[0],ar_file_size); 
+				Module module;
+				module.filename = ar_file_name;
+				module.content.resize(ar_file_size);
+				isf.read(&module.content[0],ar_file_size); 
 
 				if (!isf) break;
 				if (!isf) throw std::runtime_error("library terminates before reading entire file");
 				
 				
-				if (rel.content.size()>10 and rel.content.substr(0,3)=="XL2") {
-					rels.push_back(rel);
+				if (module.content.size()>10 and module.content.substr(0,3)=="XL2") {
+					
+					preprocessModule(module);
+					if (modules.count(module.name)) throw std::runtime_error("File " + arg + " declares a module already defined in: " + modules[module.name].front().filename);
+					modules[module.name].push_back(module);
+
 				} else {
+					
 					Log(2) << "File " << ar_file_name << " not a relocatable object file";
 				} 
 				
@@ -287,127 +397,36 @@ int main(int argc, char *argv[]) {
 			}
 		}
 	}
-	
-
-	// FAST ERROR CHECKING
-	if (rels.empty()) throw std::runtime_error("No files to parse");
-	
-	// PREPROCESS ALL RELS
-	for (auto &&rel : rels) {
-		
-		std::istringstream isf(rel.content);
-		std::string line;
-
-		rel.name = "";
-		if (rel.filename.find(".rel")!=std::string::npos) {
-			rel.name = rel.filename.substr(0,rel.filename.find(".rel"));
-			for (auto &&c : rel.name) 
-				if (c=='.') 
-					c='_';
-		}
-
-		Log(2) << "File name: " << rel.filename << " (" << rel.name << ")"; 
 			
-		
-		while (std::getline(isf, line)) {
-			
-			std::istringstream isl(line);
-			std::string type;
-			isl >> type;
-
-
-			if (type=="XL2") { // DEFAULT
-			} else if (type=="M") { // NOT REQUIRED
-				
-				isl >> rel.name;
-				Log(1) << "Module name: " << rel.name << " (" << rel.filename << ")"; 
-				
-			} else if (type=="O") { // NOT NEEDED
-			} else if (type=="H") { // NOT NEEDED
-			} else if (type=="S") {
-				
-				REL::SYMBOL symbol;
-				std::string st = "   ";
-				
-				isl >> symbol.name >> st[0] >> st[1] >> st[2] >> HEX(symbol.addr, HEX::PLAIN);
-				
-					
-				if (st=="Def") {
-					symbol.type = REL::SYMBOL::DEF;
-				} else if (st=="Ref") {
-					symbol.type = REL::SYMBOL::REF;
-				} else throw std::runtime_error("Symbol type unexpected");
-				
-				if (not rel.areas.empty())
-					symbol.areaName = rel.areas.back().name;
-				
-				rel.symbols.push_back(symbol);
-				
-				if (rel.name.empty() and symbol.type == REL::SYMBOL::DEF and symbol.name.size()>1 and symbol.name[0]=='_') {
-					rel.name = symbol.name.substr(1);
-					Log(1) << "Rel named after symbol" << rel.name << " (" << rel.filename << ")"; 
-				}
-				
-			} else if (type=="A") {
-				
-				REL::AREA area;
-				
-				uint32_t flags;
-				isl >> area.name >> AR("size") >> HEX(area.size,HEX::PLAIN) 
-					>> AR("flags") >> flags 
-					>> AR("addr") >> HEX(area.addr,HEX::PLAIN);
-					
-				if (area.name.size()>0 and area.name[0]!='_')
-					area.name = '_' + area.name;
-				                
-				if (flags==0) {
-					area.type = REL::AREA::RELATIVE;
-				} else if (flags==8) {
-					area.type = REL::AREA::ABSOLUTE;
-				} else throw std::runtime_error("Unexpected flag");
-				
-				
-				if (area.size>0) Log(1) << "Found area: " << area.name << " of size: " << area.size;
-				if (area.size>0 and known_areas.count(area.name) == 0) throw std::runtime_error("Area " + area.name +" unknown");
-				
-				if (area.name=="_HEADER0") {
-					rel.enabled=true;
-				}
-
-				rel.areas.push_back(area);
-				
-			} else if (type=="T") { // NOT NOW
-			} else if (type=="R") { // NOT NOW
-			} else if (not type.empty()) {
-				
-				throw std::runtime_error("Unrecognized type: " + type);
-			}
-		}
-	
-		if (rel.name.empty()) throw std::runtime_error("Module not given a name" + rel.filename);
-		// CHECK FOR DUPLICATE NAMES
-	}
-	
-
-	// JOIN ALL APPENDED MODULES
+	// PROCESS THE MOVE_TO_ DIRECTIVE
 	{
-		std::map<std::string, std::string > append_directives;
+		std::map<std::string, std::string > moveDirectives;
 
-		for (auto &rel : rels) {
-			for (auto &sym : rel.symbols) {
-				if (sym.type!=REL::SYMBOL::DEF) continue;
-				if (not sym.isModuleAppendSymbol()) continue;
-				append_directives[sym.moduleAppendSource()] = sym.moduleAppendTarget(); 
+		for (auto &mp : modules) {
+			for (auto &module : mp.second) {
+				for (auto &sym : module.symbols) {
+					if (not sym.isMoveSymbol()) continue;
+					std::string source = sym.getMoveSource();
+					std::string target = sym.getMoveTarget();
+					
+					if (moveDirectives.count(source) and moveDirectives[source] != target) throw std::runtime_error("Module symbols can not be send to more than one target: (" + source + " -> " + target + ")" );
+					if (modules.count(source)==0) throw std::runtime_error("Unknown source module: " + source );
+					if (modules.count(target)==0) throw std::runtime_error("Unknown target module: " + target );
+
+					moveDirectives[source] = target;
+				}
 			}
 		}
+		
+		for (auto &md : moveDirectives) {
 
-		for (auto &rel : rels) {
-			if (append_directives.count(rel.name)) {
-				
-			}
-		
-		
-		
+			if (moveDirectives.count(md.second)) 
+				throw std::runtime_error("Moving symbols functionality does not support chains (yet)" );
+			
+			for (auto &mp : modules[md.first])
+				modules[md.second].push_back(mp);
+			modules.erase(md.first);
+		}
 	}
 	
 	// ENABLE ALL REQUIRED FILES / MODULES
@@ -416,39 +435,58 @@ int main(int argc, char *argv[]) {
 		bool updated = false;
 
 		std::map<std::string,int> referencedSymbols;
-		std::set<std::string> definedSymbols;
 
-		for (auto &rel : rels) {
-			if (not rel.enabled) continue;
-			for (auto &sym : rel.symbols) {
-				if (sym.type!=REL::SYMBOL::REF) continue;
-				if (sym.isModuleAddressSymbol()) {
-					for (auto &rel2 : rels) {
-						if (rel2.enabled) continue;
-						if (rel2.name != sym.moduleName()) continue;
-						rel2.enabled = true;
-						updated = true;
+		for (auto &mp : modules) {
+			for (auto &module : mp.second) {
+				
+				if (not module.enabled) continue;
+				
+				for (auto &sym : module.symbols) {
+					
+					if (sym.type != Module::Symbol::REF) continue;
+					
+					if (sym.isConfigurationSymbol()) continue;
+					
+					if (sym.isSegmentSymbol()) {
+						
+						std::string requiredModule = sym.getSegmentName(); 
+						
+						if (modules.count(requiredModule)==0) throw std::runtime_error("Module: " + module.name + " requires unknown module: " + requiredModule );
+
+						if (module.name == requiredModule and sym.areaName == "_CODE") 
+							std::cerr << "Warning: Module " << module.name << " is loading itself within the banked (_CODE) area. Are you sure?" << std::endl;
+						
+						if (false) {// IS THIS RELLY NEEDED?
+							for (auto &m : modules[requiredModule])
+								m.enabled = true; 
+							updated = true;
+						}
+						continue;
 					}
-					continue;
+					
+					referencedSymbols[sym.name] = 0;
 				}
-				if (sym.isMegalinkerSymbol()) continue;
-				referencedSymbols[sym.name] = 0;
 			}
 		}
 
-		for (auto &rel : rels) {
-			for (auto &sym : rel.symbols) {
-				if (sym.type!=REL::SYMBOL::DEF) continue;
+		for (auto &mp : modules) {
+			for (auto &module : mp.second) {
+				for (auto &sym : module.symbols) {
 					
-				if (not rel.enabled and referencedSymbols.count(sym.name)) {
-					rel.enabled = true;
-					updated = true;
-				}
-				
-				if (rel.enabled and referencedSymbols.count(sym.name)) {
-					if (definedSymbols.count(sym.name)) throw std::runtime_error("Symbol: " + sym.name + "defined multiple times");
-					definedSymbols.insert(sym.name);
-					referencedSymbols[sym.name]++;
+					if (sym.type != Module::Symbol::DEF) continue;
+
+					if (sym.isConfigurationSymbol()) continue;
+						
+					if (not module.enabled and referencedSymbols.count(sym.name)) {
+						module.enabled = true;
+						updated = true;
+					}
+					
+					if (module.enabled and referencedSymbols.count(sym.name)) {
+						
+						if (referencedSymbols[sym.name]>0) throw std::runtime_error("Symbol: " + sym.name + " defined multiple times");
+						referencedSymbols[sym.name]++;
+					}
 				}
 			}
 		}
@@ -460,196 +498,218 @@ int main(int argc, char *argv[]) {
 		if (not updated) break;
 	}
 
-	
+	// REMOVE NON ENABLED SUB-MODULES
+	for (auto &mp : modules) {
+		auto &m = mp.second;
+		auto it =  std::remove_if(m.begin(), m.end(), [](const Module &item) { return not item.enabled; });
+		m.erase(it, m.end());
+	}
+
+	// REMOVE MODULES WITHOUT ACTIVE SUB-MODULES
+	for (auto it = modules.begin(); it != modules.end(); ) {
+        if (it->second.empty())
+			it = modules.erase(it);
+        else
+            ++it;
+    }
+ 
 	// PAGE ALLOCATION AND ERROR CHECKING
 	{
-		std::map<std::string,REL *> modulesByName;
-
-		for (auto &&rel : rels)
-			if (rel.enabled)
-				modulesByName.emplace(rel.name,&rel);
-				
-		for (auto &&mod : modulesByName)
-			Log(3) << mod.first;
-
-		for (auto &&rel : rels) {
-			if (not rel.enabled) continue;
-			for (auto &sym : rel.symbols) {
-				if (sym.type!=REL::SYMBOL::REF) continue; 
-				if (not sym.isModuleAddressSymbol()) continue;
-								
-				if (modulesByName.count(sym.moduleName())==0)
-					throw std::runtime_error("Module " + sym.moduleName() + " unknown");
-				
-				if (modulesByName[sym.moduleName()]->page==-1)
-					modulesByName[sym.moduleName()]->page = sym.page();
+		for (auto &mp : modules) {
+			for (auto &module : mp.second) {
+				for (auto &sym : module.symbols) {
+					if (not sym.isSegmentSymbol()) continue;
 					
-				if (modulesByName[sym.moduleName()]->page != sym.page())
-					throw std::runtime_error("Module " + sym.moduleName() + " required at different pages");
+					std::string requiredModule = sym.getSegmentName(); 
+					int requiredPage = sym.getSegmentPage();
+					
+					for (auto &m : modules[requiredModule]) {
+						if (m.page == -1)
+							m.page = requiredPage;
+					
+						if (m.page != requiredPage)
+							throw std::runtime_error("Module " + requiredModule + " required at different pages");
+					}
+				}
 			}
 		}
 
-		// TODO: Move this warning once we know that the symbol is required at not HOME section
-		for (auto &&rel : rels) {
-			if (not rel.enabled) continue;
-			for (auto &sym : rel.symbols) {
-				if (sym.type!=REL::SYMBOL::REF) continue; 
-				if (not sym.isModuleAddressSymbol()) continue;
-				
-				if (modulesByName[sym.moduleName()]->page == rel.page)
-					std::cerr << "Warning: Module " << rel.name << " is loading " << sym.moduleName() << " in its own page" << std::endl;
+		for (auto &mp : modules) {
+			for (auto &module : mp.second) {
+				for (auto &sym : module.symbols) {
+					if (not sym.isSegmentSymbol()) continue;
+					
+					std::string requiredModule = sym.getSegmentName(); 
+					int requiredPage = sym.getSegmentPage();
+
+					if (sym.areaName != "_HOME") 
+						if (requiredPage == module.page)
+							std::cerr << "Warning: Module " << module.name << " is loading " << requiredModule << " in its own page" << std::endl;
+				}
 			}
 		}
 	}
 	
 	std::map<std::string, uint32_t> megalinkerSymbols;
-	// FINDING ALL MEGALINKER DEFINED SYMBOLS
+	// FIND ALL MEGALINKER DEFINED CONFIGURATION SYMBOLS
 	{
-		for (auto &&rel : rels) {
-			if (not rel.enabled) continue;
-			for (auto &sym : rel.symbols) {
-				if (sym.type!=REL::SYMBOL::DEF) continue;
-				if (not sym.isMegalinkerSymbol()) continue;
-				megalinkerSymbols[sym.name] = sym.addr;
+		for (auto &mp : modules) {
+			for (auto &module : mp.second) {
+				for (auto &sym : module.symbols) {
+					if (sym.type != Module::Symbol::DEF) continue;
+					if (not sym.isConfigurationSymbol()) continue;
+										
+					if (megalinkerSymbols.count(sym.name) and megalinkerSymbols[sym.name] != sym.addr)
+						throw std::runtime_error("Conflicting definitions of: " + sym.name );
+						
+					megalinkerSymbols[sym.name] = sym.addr;
+				}
 			}
 		}
 	}
+	
 	uint32_t rom_ptr = -1;
 	uint32_t ram_ptr = -1;
-	if (megalinkerSymbols.count("___ML_RAM_START")==0) throw std::runtime_error("___ML_RAM_START not defined");
-	ram_ptr = megalinkerSymbols["___ML_RAM_START"];
+	if (megalinkerSymbols.count("___ML_CONFIG_RAM_START")==0) throw std::runtime_error("___ML_CONFIG_RAM_START not defined");
+	ram_ptr = megalinkerSymbols["___ML_CONFIG_RAM_START"];
 	
 	// ALLOCATE ALL NON BANKABLE AREAS
 	{
-		for (auto &rel : rels) {
-			if (not rel.enabled) continue;
-			for (auto &area:  rel.areas) {
-				if (area.name!="_HEADER0") continue;
-				if (rom_ptr!=uint32_t(-1)) throw std::runtime_error(area.name + " defined more than once: " + rel.filename);
-				if (area.type != REL::AREA::ABSOLUTE) throw std::runtime_error(area.name + " not absolute: " + rel.filename);
-				if (area.addr != 0x4000) throw std::runtime_error("HEADER not at 0x4000: " + rel.filename);
-	
-				rom_ptr = area.addr;
-				area.rom_addr = area.addr;
-				rom_ptr += area.size;
+
+		for (auto &mp : modules) {
+			for (auto &module : mp.second) {
+				for (auto &area:  module.areas) {
+					if (area.name!="_HEADER0") continue;
+					if (rom_ptr!=uint32_t(-1)) throw std::runtime_error(area.name + " defined more than once: " + module.filename);
+					if (area.type != Module::Area::ABSOLUTE) throw std::runtime_error(area.name + " not absolute: " + module.filename);
+					if (area.addr != 0x4000) throw std::runtime_error("HEADER not at 0x4000: " + module.filename);
+		
+					rom_ptr = area.addr;
+					area.rom_addr = area.addr;
+					rom_ptr += area.size;
+				}
 			}
 		}
 		
-		for (auto &rel : rels) {
-			if (not rel.enabled) continue;
-			for (auto &area:  rel.areas) {
-				if (area.name!="_GSINIT") continue;
-				if (area.type != REL::AREA::RELATIVE) throw std::runtime_error(area.name + " not relative: " + rel.filename);
+		for (auto &mp : modules) {
+			for (auto &module : mp.second) {
+				for (auto &area:  module.areas) {
+					if (area.name!="_GSINIT") continue;
+					if (area.type != Module::Area::RELATIVE) throw std::runtime_error(area.name + " not relative: " + module.filename);
 
-				area.addr = rom_ptr;
-				area.rom_addr = area.addr;
-				rom_ptr += area.size;
+					area.addr = rom_ptr;
+					area.rom_addr = area.addr;
+					rom_ptr += area.size;
+				}
 			}
 		}
 
-		for (auto &rel : rels) {
-			if (not rel.enabled) continue;
-			for (auto &area:  rel.areas) {
-				if (area.name!="_GSFINAL") continue;
-				if (area.type != REL::AREA::RELATIVE) throw std::runtime_error(area.name + " not relative: " + rel.filename);
+		for (auto &mp : modules) {
+			for (auto &module : mp.second) {
+				for (auto &area:  module.areas) {
+					if (area.name!="_GSFINAL") continue;
+					if (area.type != Module::Area::RELATIVE) throw std::runtime_error(area.name + " not relative: " + module.filename);
 
-				area.addr = rom_ptr;
-				area.rom_addr = area.addr;
-				rom_ptr += area.size;
+					area.addr = rom_ptr;
+					area.rom_addr = area.addr;
+					rom_ptr += area.size;
+				}
 			}
 		}
 
-		megalinkerSymbols["___ML_INIT_ROM_START"] = rom_ptr;
-		megalinkerSymbols["___ML_INIT_RAM_START"] = ram_ptr;
+		megalinkerSymbols["___ML_CONFIG_INIT_ROM_START"] = rom_ptr;
+		megalinkerSymbols["___ML_CONFIG_INIT_RAM_START"] = ram_ptr;
 
-		for (auto &rel : rels) {
-			if (not rel.enabled) continue;
-			for (auto &area:  rel.areas) {
-				if (area.name!="_HOME") continue;
-				if (area.type != REL::AREA::RELATIVE) throw std::runtime_error(area.name + " not relative: " + rel.filename);
+		for (auto &mp : modules) {
+			for (auto &module : mp.second) {
+				for (auto &area:  module.areas) {
+					if (area.name!="_HOME") continue;
+					if (area.type != Module::Area::RELATIVE) throw std::runtime_error(area.name + " not relative: " + module.filename);
 
-				area.addr = ram_ptr;
-				area.rom_addr = rom_ptr;
-				rom_ptr += area.size;
-				ram_ptr += area.size;
+					area.addr = ram_ptr;
+					area.rom_addr = rom_ptr;
+					rom_ptr += area.size;
+					ram_ptr += area.size;
+				}
 			}
 		}
 
 
-		for (auto &rel : rels) {
-			if (not rel.enabled) continue;
-			for (auto &area:  rel.areas) {
-				if (area.name!="_INITIALIZER") continue;
-				if (area.type != REL::AREA::RELATIVE) throw std::runtime_error(area.name + " not relative: " + rel.filename);
+		for (auto &mp : modules) {
+			for (auto &module : mp.second) {
+				for (auto &area:  module.areas) {
+					if (area.name!="_INITIALIZER") continue;
+					if (area.type != Module::Area::RELATIVE) throw std::runtime_error(area.name + " not relative: " + module.filename);
 
-				area.addr = rom_ptr;
-				area.rom_addr = area.addr;
-				rom_ptr += area.size;
+					area.addr = rom_ptr;
+					area.rom_addr = area.addr;
+					rom_ptr += area.size;
+				}
 			}
 		}
-		megalinkerSymbols["___ML_INIT_SIZE"] = rom_ptr - megalinkerSymbols["___ML_INIT_ROM_START"];
+		megalinkerSymbols["___ML_CONFIG_INIT_SIZE"] = rom_ptr - megalinkerSymbols["___ML_CONFIG_INIT_ROM_START"];
 
-		for (auto &rel : rels) {
-			if (not rel.enabled) continue;
-			for (auto &area:  rel.areas) {
-				if (area.name!="_INITIALIZED") continue;
-				if (area.type != REL::AREA::RELATIVE) throw std::runtime_error(area.name + " not relative: " + rel.filename);
+		for (auto &mp : modules) {
+			for (auto &module : mp.second) {
+				for (auto &area:  module.areas) {
+					if (area.name!="_INITIALIZED") continue;
+					if (area.type != Module::Area::RELATIVE) throw std::runtime_error(area.name + " not relative: " + module.filename);
 
-				area.addr = ram_ptr;
-				area.rom_addr = uint32_t(-1);
-				ram_ptr += area.size;
+					area.addr = ram_ptr;
+					area.rom_addr = uint32_t(-1);
+					ram_ptr += area.size;
+				}
 			}
 		}
 
-		for (auto &rel : rels) {
-			if (not rel.enabled) continue;
-			for (auto &area:  rel.areas) {
-				if (area.name!="_DATA") continue;
-				if (area.type != REL::AREA::RELATIVE) throw std::runtime_error(area.name + " not relative: " + rel.filename);
+		for (auto &mp : modules) {
+			for (auto &module : mp.second) {
+				for (auto &area:  module.areas) {
+					if (area.name!="_DATA") continue;
+					if (area.type != Module::Area::RELATIVE) throw std::runtime_error(area.name + " not relative: " + module.filename);
 
-				area.addr = ram_ptr;
-				area.rom_addr = uint32_t(-1);
-				ram_ptr += area.size;
+					area.addr = ram_ptr;
+					area.rom_addr = uint32_t(-1);
+					ram_ptr += area.size;
+				}
 			}
-		}		
+		}
 
-		for (auto &rel : rels) {
-			if (not rel.enabled) continue;
-			for (auto &area:  rel.areas) {
-				if (area.name!="_XDATA") continue;
-				if (area.type != REL::AREA::RELATIVE) throw std::runtime_error(area.name + " not relative: " + rel.filename);
+		for (auto &mp : modules) {
+			for (auto &module : mp.second) {
+				for (auto &area:  module.areas) {
+					if (area.name!="_XDATA") continue;
+					if (area.type != Module::Area::RELATIVE) throw std::runtime_error(area.name + " not relative: " + module.filename);
 
-				area.addr = ram_ptr;
-				area.rom_addr = uint32_t(-1);
-				ram_ptr += area.size;
+					area.addr = ram_ptr;
+					area.rom_addr = uint32_t(-1);
+					ram_ptr += area.size;
+				}
 			}
-		}		
+		}
 	}
 
 	// ALLOCATE BANKABLE CODE AREAS
 	{	
-		std::vector<std::pair<uint32_t,std::reference_wrapper<REL>>> bankableRels;
+		std::vector<std::pair<uint32_t,std::string>> bankableModules;
 		
-		for (auto &rel : rels) {
-			if (not rel.enabled) continue;
-//			if (not rel.page!=0) continue;
-			for (auto &area:  rel.areas) {
-				if (area.name!="_CODE") continue;
-				if (area.size==0) continue;
-				if (rel.page<0) throw std::runtime_error(rel.name + " used but not allocated a page");
-				if (area.type != REL::AREA::RELATIVE) throw std::runtime_error(area.name + " not relative: " + rel.filename);
-				
-				bankableRels.emplace_back(area.size,std::ref(rel));
-				
-				if (area.size>0x2000) throw std::runtime_error("File: " + rel.name + " too large to fit a segment");
-			}
+		for (auto &mp : modules) {
+			bankableModules.emplace_back(0,mp.first);
+			for (auto &module : mp.second) {
+				for (auto &area:  module.areas) {
+					if (area.name!="_CODE") continue;
+					if (area.size==0) continue;
+					if (module.page<0) throw std::runtime_error(module.name + " used but not allocated a page");
+					if (area.type != Module::Area::RELATIVE) throw std::runtime_error(area.name + " not relative: " + module.filename);
+					
+					bankableModules.back().first += area.size;
+				}
+			}		
+			if (bankableModules.back().first>0x2000) throw std::runtime_error("Module " + mp.first + " too large to fit a segment");
 		}
 		
-		std::sort(bankableRels.begin(), bankableRels.end(), 
-		[](const std::pair<uint32_t,std::reference_wrapper<REL>> &rhs,const std::pair<uint32_t,std::reference_wrapper<REL>> &lhs){
-			return rhs.first < lhs.first;
-		});
-		std::reverse(bankableRels.begin(), bankableRels.end());
+		std::sort(bankableModules.begin(), bankableModules.end());
+		std::reverse(bankableModules.begin(), bankableModules.end());
 
 		std::vector<uint32_t> segments;
 		segments.push_back(std::max(0U, 0x6000-rom_ptr));
@@ -657,26 +717,26 @@ int main(int argc, char *argv[]) {
 		segments.push_back(std::max(0U, 0xA000-rom_ptr));
 		segments.push_back(std::max(0U, 0xC000-rom_ptr));
 				
-		for (auto &prel: bankableRels) {
+		for (auto& [size, name]: bankableModules) {
+			
 			uint32_t i;
-			for (i=0; i<segments.size() and segments[i]<prel.first; i++);
+			for (i=0; i<segments.size() and segments[i]<size; i++);
 			if (i==segments.size()) 
 				segments.push_back(0x2000);
 
-			for (auto &a : prel.second.get().areas) {
-				if (a.name=="_CODE") {
-					a.addr = 0x2000*(2+prel.second.get().page) + 0x2000 - segments[i]; 
-					a.rom_addr = 0x2000*(2+i) + 0x2000 - segments[i];
+			for (auto &module : modules[name]) {
+				module.segment = i;
+				for (auto &area:  module.areas) {
+					if (area.name != "_CODE") continue;
+
+					area.addr = 0x2000*(2+module.page) + 0x2000 - segments[i]; 
+					area.rom_addr = 0x2000*(2+i) + 0x2000 - segments[i];
+
+					segments[i] -= area.size;
+
+					Log(2) << "Module: " << module.name << " addressed at: 0x" << std::hex << area.addr << std::dec << " (" << area.size << " bytes) in page: " << module.page << " and segment " << module.segment;
 				}
 			}
-			
-			segments[i] -= prel.first;
-			
-			prel.second.get().segment = i;
-			
-			for (auto &a : prel.second.get().areas)
-				if (a.name=="_CODE")
-					Log(2) << "Module: " << prel.second.get().name << " addressed at: 0x" << std::hex << a.addr << std::dec << " (" << prel.first << " bytes) in page: " << prel.second.get().page << " and segment " << prel.second.get().segment;
 		}
 	}
 	
@@ -691,28 +751,29 @@ int main(int argc, char *argv[]) {
 			
 			std::multimap<uint32_t, std::string> lines;
 			
-			for (auto &rel : rels) {
-				if (rel.segment != (int)i) continue;
-				if (not rel.enabled) continue;
-				for (auto &area:  rel.areas) {
-					if (area.size==0) continue;
+			for (auto &mp : modules) {
+				for (auto &module : mp.second) {
+					if (module.segment != (int)i) continue;
+					for (auto &area:  module.areas) {
+						if (area.size==0) continue;
+							
+						std::ostringstream oss;
 						
-					std::ostringstream oss;
-					
-					char s[200];
-					if (area.rom_addr==uint32_t(-1)) {
-						snprintf(s,199,"#%3X # %04X # ----- # %04X # %8.8s #",rel.segment, area.addr, area.size, area.name.substr(1).c_str());
-					} else {
-						snprintf(s,199,"#%3X # %04X # %05X # %04X # %8.8s #",rel.segment, area.addr, area.rom_addr, area.size, area.name.substr(1).c_str());
-					}
-					oss << s;
-					for (int j=-1; j<rel.page; j++) oss << "                      #";
-					snprintf(s,199," %20.20s #",rel.name.c_str());
-					oss << s;	
-					for (int j=rel.page+1; j<4; j++) oss << "                      #";
-					lines.emplace(area.addr,oss.str());
-					
-				}	
+						char s[200];
+						if (area.rom_addr==uint32_t(-1)) {
+							snprintf(s,199,"#%3X # %04X # ----- # %04X # %8.8s #",module.segment, area.addr, area.size, area.name.substr(1).c_str());
+						} else {
+							snprintf(s,199,"#%3X # %04X # %05X # %04X # %8.8s #",module.segment, area.addr, area.rom_addr, area.size, area.name.substr(1).c_str());
+						}
+						oss << s;
+						for (int j=-1; j<module.page; j++) oss << "                      #";
+						snprintf(s,199," %20.20s #",module.name.c_str());
+						oss << s;	
+						for (int j=module.page+1; j<4; j++) oss << "                      #";
+						lines.emplace(area.addr,oss.str());
+						
+					}	
+				}
 			}
 			for (auto &&s : lines)
 				off << s.second << std::endl;
@@ -732,33 +793,34 @@ int main(int argc, char *argv[]) {
 			
 			std::multimap<uint32_t, std::string> lines;
 			
-			for (auto &rel : rels) {
-				if (rel.segment != (int)i) continue;
-				if (not rel.enabled) continue;
-				for (auto &area:  rel.areas) {
-					if (area.size==0) continue;
+			for (auto &mp : modules) {
+				for (auto &module : mp.second) {
+					if (module.segment != (int)i) continue;
+					for (auto &area:  module.areas) {
+						if (area.size==0) continue;
 
-					for (auto &symbol : rel.symbols) {
-						if (symbol.type != REL::SYMBOL::DEF) continue;
-						if (symbol.areaName != area.name) continue;
+						for (auto &symbol : module.symbols) {
+							if (symbol.type != Module::Symbol::DEF) continue;
+							if (symbol.areaName != area.name) continue;
+							
+							std::ostringstream oss;
+							
+							char s[200];
+							if (area.rom_addr==uint32_t(-1)) {
+								snprintf(s,199,"#%3X # %04X # ----- # %-8.8s #",module.segment, area.addr + symbol.addr, module.name.c_str());
+							} else {
+								snprintf(s,199,"#%3X # %04X # %05X # %-8.8s #",module.segment, area.addr + symbol.addr, area.rom_addr + symbol.addr, module.name.c_str());
+							}
+							oss << s;
+							for (int j=-1; j<module.page; j++) oss << "                      #";
+							snprintf(s,199," %-20.20s #",symbol.name.c_str());
+							oss << s;	
+							for (int j=module.page+1; j<4; j++) oss << "                      #";
+							lines.emplace(area.addr,oss.str());
 						
-						std::ostringstream oss;
-						
-						char s[200];
-						if (area.rom_addr==uint32_t(-1)) {
-							snprintf(s,199,"#%3X # %04X # ----- # %-8.8s #",rel.segment, area.addr + symbol.addr, rel.name.c_str());
-						} else {
-							snprintf(s,199,"#%3X # %04X # %05X # %-8.8s #",rel.segment, area.addr + symbol.addr, area.rom_addr + symbol.addr, rel.name.c_str());
 						}
-						oss << s;
-						for (int j=-1; j<rel.page; j++) oss << "                      #";
-						snprintf(s,199," %-20.20s #",symbol.name.c_str());
-						oss << s;	
-						for (int j=rel.page+1; j<4; j++) oss << "                      #";
-						lines.emplace(area.addr,oss.str());
-					
-					}
-				}	
+					}	
+				}
 			}
 			for (auto &&s : lines)
 				off << s.second << std::endl;
@@ -771,194 +833,180 @@ int main(int argc, char *argv[]) {
 	Log(2) << "Allocated: " << (rom_ptr-0x4000) << " bytes of ROM";
 	if (rom_ptr>0xC000) throw std::runtime_error("Main segment ROM doesn't fit 32KB");
 
-	Log(2) << "Allocated: " << (ram_ptr-megalinkerSymbols["___ML_RAM_START"]) << " bytes of RAM";		
+	Log(2) << "Allocated: " << (ram_ptr-megalinkerSymbols["___ML_CONFIG_RAM_START"]) << " bytes of RAM";		
 	if (ram_ptr>0xF000) throw std::runtime_error("Ram area dangerously close to stack.");
 	
 	// DO LABEL SYMBOL ADDRESSES
 	std::map<std::string,uint32_t> symbolsAddress;
-	for (auto &rel : rels) {
-		if (not rel.enabled) continue;
-		std::map<std::string,uint32_t> areaAddress;
-		for (auto &area:  rel.areas) 
-			areaAddress[area.name] = area.addr;
-			
-		for (auto &symbol : rel.symbols) {
-			if (symbol.type == REL::SYMBOL::DEF) {
-				symbolsAddress[symbol.name] = areaAddress[symbol.areaName] + symbol.addr;
-				symbol.absoluteAddress = symbolsAddress[symbol.name];
-				if (symbol.name[0]!='.') 
-					Log(2) << "Symbol: " << symbol.name << " defined at: 0x" << std::hex << symbol.absoluteAddress << std::dec << " at page: " << rel.page;
+	for (auto &mp : modules) {
+		for (auto &module : mp.second) {
+			std::map<std::string, uint32_t> areaAddress;
+			for (auto &area:  module.areas) 
+				areaAddress[area.name] = area.addr;
+				
+			for (auto &symbol : module.symbols) {
+				if (symbol.type == Module::Symbol::DEF) {
+					symbolsAddress[symbol.name] = areaAddress[symbol.areaName] + symbol.addr;
+					symbol.absoluteAddress = symbolsAddress[symbol.name];
+					if (symbol.name[0]!='.') 
+						Log(2) << "Symbol: " << symbol.name << " defined at: 0x" << std::hex << symbol.absoluteAddress << std::dec << " at page: " << module.page;
+				}
 			}
 		}
 	}
 	
 	// DO EXTRACT THE CODE
 	std::vector<uint8_t> rom(0x20000,0xff);
-	for (auto &rel : rels) {		
-		if (not rel.enabled) continue;
+	for (auto &mp : modules) {
+		for (auto &module : mp.second) {
 		
-		std::ifstream isf(rel.filename);
-		std::string line;
-		
-		uint32_t current_area=0;
-		std::vector<int> area_addr;
-		std::vector<int> area_rom_addr;
-		for (auto &area : rel.areas) {
-		//		std::cerr << rel.name << " " << area.name << " " << area.rom_addr << " " << area.size << std::endl;
-			if (area.type == REL::AREA::RELATIVE) {
-				area_addr.push_back(area.addr); 
-				area_rom_addr.push_back(area.rom_addr); 
-			} else {
-				if (area.size)
-					Log(3) << "Module: " << rel.name << " Area: " << area.name << " " << area.addr << " " << area.rom_addr;
-				area_addr.push_back(0);
-				area_rom_addr.push_back(0);
+			std::istringstream isf(module.content);
+			std::string line;
+			
+			uint32_t current_area=0;
+			std::vector<int> area_addr;
+			std::vector<int> area_rom_addr;
+			for (auto &area : module.areas) {
+				if (area.type == Module::Area::RELATIVE) {
+					area_addr.push_back(area.addr); 
+					area_rom_addr.push_back(area.rom_addr); 
+				} else {
+					if (area.size)
+						Log(3) << "Module: " << module.name << " Area: " << area.name << " " << area.addr << " " << area.rom_addr;
+					area_addr.push_back(0);
+					area_rom_addr.push_back(0);
+				}
 			}
-		}
+				
+			uint32_t last_t_pos=0;
+			std::vector<uint8_t> T;
 			
-		uint32_t last_t_pos=0;
-		std::vector<uint8_t> T;
-		
-		
-		while (std::getline(isf, line)) {
-			
-			std::istringstream isl(line);
-			std::string type;
-			isl >> type;
-
-			if (type=="XL2") { // DEFAULT
-			} else if (type=="M") { // NOT HERE
-			} else if (type=="O") { // NOT NEEDED
-			} else if (type=="H") { // NOT NEEDED
-			} else if (type=="S") { // NOT HERE
-			} else if (type=="A") { // NOT HERE
-			} else if (type=="T") { // HERE
+			while (std::getline(isf, line)) {
 				
-				uint32_t xx0, xx1;
-				isl >> HEX(xx0,HEX::TWO_NIBBLES) >> HEX(xx1,HEX::TWO_NIBBLES);
-				last_t_pos = xx1*0x100 + xx0;
-				
-				T.clear();
-				uint32_t nn;
-				while (isl >> HEX(nn,HEX::TWO_NIBBLES))
-					T.push_back(nn);
-				
-			} else if (type=="R") { // HERE
+				std::istringstream isl(line);
+				std::string type;
+				isl >> type;
 
-				uint32_t aa0, aa1;
-				isl >> AR("00") >> AR("00") >> HEX2(aa0) >> HEX2(aa1);
-				current_area = aa1*0x100 + aa0;
-
-				uint32_t n1, n2, xx0, xx1;
-				uint32_t n2Adjust = 2;
-				while (isl >> HEX2(n1) >> HEX2(n2) >> HEX2(xx0) >> HEX2(xx1)) {
-
-					enum { 
-						R3_WORD=0x00, R3_BYTE=0x01, 
-						R3_AREA=0x00, R3_SYM =0x02, 
-						R3_NORM=0x00, R3_PCR =0x04, 
-						R3_BYT1=0x00, R3_BYTX=0x08, 
-						R3_SGND=0x00, R3_USGN=0x10,
-						R3_LSB =0x00, R3_MSB =0x80
-					};
+				if (type=="XL2") { // HEADER
+				} else if (type=="M") { // NOT HERE
+				} else if (type=="O") { // NOT NEEDED
+				} else if (type=="H") { // NOT NEEDED
+				} else if (type=="S") { // NOT HERE
+				} else if (type=="A") { // NOT HERE
+				} else if (type=="T") { // HERE
 					
-					uint32_t idx = xx1*0x100 + xx0;
-					uint32_t address = 0;
+					uint32_t xx0, xx1;
+					isl >> HEX(xx0,HEX::TWO_NIBBLES) >> HEX(xx1,HEX::TWO_NIBBLES);
+					last_t_pos = xx1*0x100 + xx0;
 					
-					if (n2 <n2Adjust) 
-						throw std::runtime_error("n2 < n2Adjust??");
-					n2-=n2Adjust;
+					T.clear();
+					uint32_t nn;
+					while (isl >> HEX(nn,HEX::TWO_NIBBLES))
+						T.push_back(nn);
+					
+				} else if (type=="R") { // HERE
 
-					
-					if ( n1 & R3_SYM ) {
+					uint32_t aa0, aa1;
+					isl >> AR("00") >> AR("00") >> HEX2(aa0) >> HEX2(aa1);
+					current_area = aa1*0x100 + aa0;
+
+					uint32_t n1, n2, xx0, xx1;
+					uint32_t n2Adjust = 2;
+					while (isl >> HEX2(n1) >> HEX2(n2) >> HEX2(xx0) >> HEX2(xx1)) {
+
+						enum { 
+							R3_WORD=0x00, R3_BYTE=0x01, 
+							R3_AREA=0x00, R3_SYM =0x02, 
+							R3_NORM=0x00, R3_PCR =0x04, 
+							R3_BYT1=0x00, R3_BYTX=0x08, 
+							R3_SGND=0x00, R3_USGN=0x10,
+							R3_LSB =0x00, R3_MSB =0x80
+						};
 						
-						if (symbolsAddress.count(rel.symbols[idx].name)!=0)  {
+						uint32_t idx = xx1*0x100 + xx0;
+						uint32_t address = 0;
+						
+						if (n2 <n2Adjust) 
+							throw std::runtime_error("n2 < n2Adjust??");
+						n2-=n2Adjust;
 
-							address = symbolsAddress[rel.symbols[idx].name];
-						} else if (rel.symbols[idx].isModuleAddressSymbol()) {
+						
+						if ( n1 & R3_SYM ) {
 							
-							std::string requested_module = rel.symbols[idx].moduleName();
-							//Log(10) << "Looking for module: " << requested_module;
-							for (auto &rel2 : rels) {
-								if (rel2.name == requested_module) {
-									address = rel2.segment;
-									Log(0) << "FOUND! for module: " << requested_module << " " << rel2.name << " " << rel2.segment;
-								}
+							if (symbolsAddress.count(module.symbols[idx].name)!=0)  {
+
+								address = symbolsAddress[module.symbols[idx].name];
+							} else if (module.symbols[idx].isSegmentSymbol()) {
+								
+								std::string requestedModule = module.symbols[idx].getSegmentName();
+								address = modules[requestedModule].front().segment;
+							
+							} else if (module.symbols[idx].isConfigurationSymbol()) {
+							
+								address = megalinkerSymbols[module.symbols[idx].name];
+							} else {
+							
+								throw std::runtime_error("Undefined symbol: " + module.symbols[idx].name); 
 							}
+							
+							Log(3) << module.symbols[idx].name << " " << std::hex << address;
+							
+							n1 -= R3_SYM;
+						} else  {
 						
-						} else if (rel.symbols[idx].isMegalinkerSymbol()) {
-						
-							address = megalinkerSymbols[rel.symbols[idx].name];
-						} else {
-						
-							throw std::runtime_error("Undefined symbol: " + rel.symbols[idx].name); 
+							address = area_addr[idx];
 						}
 						
-						Log(3) << rel.symbols[idx].name << " " << std::hex << address;
 						
-						n1 -= R3_SYM;
-					} else  {
+						if        (n1 == R3_WORD ) {
+
+							address += T[n2+0] + T[n2+1]*0x100;
+							
+							T[n2+0] = address & 0xFF;
+							T[n2+1] = address >> 8;
+						
+						} else if (n1 == R3_BYTE + R3_BYTX + R3_LSB) {
+							
+							address += T[n2+0] + T[n2+1]*0x100;
+
+							for (uint32_t i=n2+1; i<T.size(); i++) 
+								T[i-1] = T[i];
+							T.pop_back();
+
+							T[n2+0] = address & 0xFF;
+							
+							n2Adjust++;
+
+						} else if (n1 == R3_BYTE + R3_BYTX + R3_MSB) {
+							
+							address += T[n2+0] + T[n2+1]*0x100;
+
+							for (uint32_t i=n2+1; i<T.size(); i++) 
+								T[i-1] = T[i];
+							T.pop_back();
+
+							T[n2+0] = (address>>8) & 0xFF;
+							
+							n2Adjust++;
+
+
+						} else {
+							Log(3) << "N1: 0x"<< std::hex << n1 << std::dec;
+							throw std::runtime_error("Unsupported relocation flag combination");
+						}
+					}	
+
+
+					if (T.size())
+						while (rom.size() < last_t_pos + area_rom_addr[current_area] - 0x4000 + T.size()) 
+							rom.resize(rom.size()+0x2000,0xff);
+
+					for (auto &t : T) rom[area_rom_addr[current_area] - 0x4000 + last_t_pos++] = t;
+
+				} else if (not type.empty()) {
 					
-						address = area_addr[idx];
-					}
-					
-					
-					if        (n1 == R3_WORD ) {
-
-						address += T[n2+0] + T[n2+1]*0x100;
-						
-						T[n2+0] = address & 0xFF;
-						T[n2+1] = address >> 8;
-					
-					} else if (n1 == R3_BYTE + R3_BYTX + R3_LSB) {
-						
-						address += T[n2+0] + T[n2+1]*0x100;
-
-						for (uint32_t i=n2+1; i<T.size(); i++) 
-							T[i-1] = T[i];
-						T.pop_back();
-
-						T[n2+0] = address & 0xFF;
-						
-						n2Adjust++;
-
-					} else if (n1 == R3_BYTE + R3_BYTX + R3_MSB) {
-						
-						address += T[n2+0] + T[n2+1]*0x100;
-
-						for (uint32_t i=n2+1; i<T.size(); i++) 
-							T[i-1] = T[i];
-						T.pop_back();
-
-						T[n2+0] = (address>>8) & 0xFF;
-						
-						n2Adjust++;
-
-
-					} else {
-						Log(3) << "N1: 0x"<< std::hex << n1 << std::dec;
-						throw std::runtime_error("Unsupported relocation flag combination");
-					}
-				}	
-
-
-//				std::cerr << rel.name << " " << (last_t_pos +area_rom_addr[current_area]) << " " << T.size() << std::endl;
-
-				if (T.size())
-					while (rom.size() < last_t_pos + area_rom_addr[current_area] - 0x4000 + T.size()) 
-						rom.resize(rom.size()+0x2000,0xff);
-				
-				//if (T.size()) Log(0) << rel.name << " " << std::hex << last_t_pos;
-
-//				if (T.size()) Log(4) << std::hex << (last_t_pos - 0x2000*(rel.segment - rel.page)) << " " << rel.segment << " " << rel.page;
-					
-				
-//				for (auto &t : T) rom[last_t_pos++] = t;
-				for (auto &t : T) rom[area_rom_addr[current_area] - 0x4000 + last_t_pos++] = t;
-
-			} else if (not type.empty()) {
-				
-				std::runtime_error("Unrecognized type: " + type);
+					std::runtime_error("Unrecognized type: " + type);
+				}
 			}
 		}
 	}
@@ -971,7 +1019,10 @@ int main(int argc, char *argv[]) {
 	}
 		
     {
-        printf("Using %d bytes of ram, from 0xC000 to 0x%04X.\n", int(ram_ptr-0xC000), int(ram_ptr));
+        printf("Using %u bytes of ram, from 0x%04X to 0x%04X.\n", 
+			uint32_t(megalinkerSymbols["___ML_CONFIG_INIT_RAM_SIZE"]),
+			uint32_t(megalinkerSymbols["___ML_CONFIG_INIT_RAM_START"]), 
+			uint32_t(megalinkerSymbols["___ML_CONFIG_INIT_RAM_END"]));
     }
 
 	return 0;
