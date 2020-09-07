@@ -313,17 +313,32 @@ void preprocessModule(Module &module) {
 
 int main(int argc, char *argv[]) {
 	
-	Log::reportLevel(0);
+	Log::reportLevel(3);
 	
 	std::string romName = "out.rom";
 	std::map<std::string, std::vector<Module>> modules;
 	
-	// PREPROCESS ALL INPUT FILES
+	// PREPROCESS ARGUMENTS AND INPUT FILES
 	for (int i=1; i<argc; i++) {
 		
 		std::string arg = argv[i];
-		
-		if (arg.substr(arg.find_last_of(".")) == ".rom") {
+
+		if (arg[0] == '-') {
+			
+			if (arg == "-l") {
+				
+				if (i==argc-1) throw std::runtime_error("Log level required but not specified");
+				i++;
+
+				int level;
+				if (sscanf(argv[i], "%i", &level) != 1) throw std::runtime_error("Unrecognized level" + arg);
+				Log::reportLevel(level);
+				
+				
+			} else throw std::runtime_error("Unknown flag " + arg);
+			
+			
+		} else if (arg.substr(arg.find_last_of(".")) == ".rom") {
 
 			Log(1) << "Rom name: " << arg;
 			romName = arg;
@@ -454,14 +469,6 @@ int main(int argc, char *argv[]) {
 						
 						if (modules.count(requiredModule)==0) throw std::runtime_error("Module: " + module.name + " requires unknown module: " + requiredModule );
 
-						if (module.name == requiredModule and sym.areaName == "_CODE") 
-							std::cerr << "Warning: Module " << module.name << " is loading itself within the banked (_CODE) area. Are you sure?" << std::endl;
-						
-						if (false) {// IS THIS RELLY NEEDED?
-							for (auto &m : modules[requiredModule])
-								m.enabled = true; 
-							updated = true;
-						}
 						continue;
 					}
 					
@@ -531,21 +538,6 @@ int main(int argc, char *argv[]) {
 						if (m.page != requiredPage)
 							throw std::runtime_error("Module " + requiredModule + " required at different pages");
 					}
-				}
-			}
-		}
-
-		for (auto &mp : modules) {
-			for (auto &module : mp.second) {
-				for (auto &sym : module.symbols) {
-					if (not sym.isSegmentSymbol()) continue;
-					
-					std::string requiredModule = sym.getSegmentName(); 
-					int requiredPage = sym.getSegmentPage();
-
-					if (sym.areaName != "_HOME") 
-						if (requiredPage == module.page)
-							std::cerr << "Warning: Module " << module.name << " is loading " << requiredModule << " in its own page" << std::endl;
 				}
 			}
 		}
@@ -941,6 +933,11 @@ int main(int argc, char *argv[]) {
 								
 								std::string requestedModule = module.symbols[idx].getSegmentName();
 								address = modules[requestedModule].front().segment;
+								
+								Log(2) << "Current area: " << module.areas[current_area].name << " (" << module.page << ") is loading " << module.symbols[idx].name << " (" << modules[requestedModule].front().page << ")" ;
+								if (module.areas[current_area].name == "_CODE" and module.page == modules[requestedModule].front().page) 
+									Log(3) << "Warning: In module " << module.name << " and area: " << module.areas[current_area].name << " (" << module.page << ") is loading " << module.symbols[idx].name << " (" << modules[requestedModule].front().page << ")" ;
+								
 							
 							} else if (module.symbols[idx].isConfigurationSymbol()) {
 							

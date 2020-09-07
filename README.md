@@ -63,7 +63,7 @@ Macro | Usage
 `ML_LOAD_MODULE_X(module)` | loads a module in page X, returns the previously loaded segment in that page.
 `ML_RESTORE_X(segment)` | loads the segment in page X.
 `ML_EXECUTE_X(module, code)` | executes code from the named module.
-`ML_MOVE_SYMBOLS_TO(target_module, source_module)` | the symbols that were defined in `source_module` now belong to `target_module`.
+`ML_MOVE_SYMBOLS_TO(target_module, source_module)` | the symbols that were defined in `source_module` now belong to `target_module`. `source_module` shold not be requested now.
 `ML_REQUEST_X(module)` | is a declaration that must be used prior to use a module.
 
 Notes:
@@ -79,6 +79,8 @@ do {
 	ML_RESTORE_A(old);
 } while(0)
 ```
+
+## Suggested API
 
 
 
