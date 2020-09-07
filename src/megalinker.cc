@@ -325,7 +325,7 @@ int main(int argc, char *argv[]) {
 
 		if (arg[0] == '-') {
 			
-			if (arg == "-l") {
+			if (arg == "-l" or arg == "--log") {
 				
 				if (i==argc-1) throw std::runtime_error("Log level required but not specified");
 				i++;
@@ -334,6 +334,18 @@ int main(int argc, char *argv[]) {
 				if (sscanf(argv[i], "%i", &level) != 1) throw std::runtime_error("Unrecognized level" + arg);
 				Log::reportLevel(level);
 				
+			} else if (arg == "-h" or arg == "--help") {
+			
+				std::cout << "Megalinker: linker to build of Megaroms for MSX using SDCC" << std::endl;
+				std::cout << "Usage: megalinker [OPTION] [ROM_FILE] [REL_FILES] [LIB_FILES]" << std::endl;
+				std::cout << "  Option: -l N sets the debug level to N (default is 3)" << std::endl;
+				std::cout << "  Option: -h prints this help message" << std::endl;
+				std::cout << "  *.rom: the output rom file (only the last one counts)" << std::endl;
+				std::cout << "  *.rel: any number of compiled relocatable files from sdcc. Only the required files will be used." << std::endl;
+				std::cout << "  *.lib: any number of sdcc library files that contain relocatable files from sdcc. Those are processed as if they were individually supplied to the linker" << std::endl << std::endl;
+				
+				std::cout << "for more documentation: https://github.com/MartinezTorres/megalinker " << std::endl;
+				return 1;
 				
 			} else throw std::runtime_error("Unknown flag " + arg);
 			
