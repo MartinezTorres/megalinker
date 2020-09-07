@@ -9,7 +9,7 @@
 // PUBLIC INTERFACE
 //
 
-#define ML_MOVE_SYMBOLS_TO(target_module, source_module) const uint8_t __at 0x0000 __ML_MOVE_SYMBOLS_ ## source_module ## _TO_ ## target_module
+#define ML_MOVE_SYMBOLS_TO(target_module, source_module) const uint8_t __at 0x0000 __ML_MOVE_SYMBOLS_TO_ ## target_module ## _FROM_ ## source_module 
 
 #define ML_REQUEST_A(module) extern const uint8_t __ML_SEGMENT_A_## module
 #define ML_REQUEST_B(module) extern const uint8_t __ML_SEGMENT_B_## module

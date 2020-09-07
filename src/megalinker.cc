@@ -158,15 +158,15 @@ struct Module {
 		}
 
 		// Move Symbols Symbol
-        const std::string prefix_move = "___ML_MOVE_SYMBOLS_";
+        const std::string prefix_move = "___ML_MOVE_SYMBOLS_TO_";
         bool isMoveSymbol() const { 
             
             if (name.substr( 0, prefix_move.size()) != prefix_move) return false;
             if (type == REF) throw std::runtime_error("A program should not refer to a Megalinker Segment Symbol: " + name);
 
-			size_t pos = name.find("_TO_");
-			if (pos == std::string::npos) throw std::runtime_error("Move Symbol: " + name + " has no _TO_ tokens");
-			if (name.find("_TO_",pos+1) != std::string::npos) throw std::runtime_error("Move Symbol: " + name + " has more than one _TO_ tokens");
+			size_t pos = name.find("_FROM_");
+			if (pos == std::string::npos) throw std::runtime_error("Move Symbol: " + name + " has no _FROM_ token");
+			if (name.find("_FROM_",pos+1) != std::string::npos) throw std::runtime_error("Move Symbol: " + name + " has more than one _FROM_ tokens");
 			
             return true;
         }
@@ -174,13 +174,13 @@ struct Module {
         std::string getMoveTarget() const { 
 
 			if (not isMoveSymbol()) throw std::runtime_error("Module Symbol: " + name + " is not a module append symbol");						
-			return name.substr(prefix_move.size(), name.find("_TO_") - prefix_move.size()); 
+			return name.substr(prefix_move.size(), name.find("_FROM_") - prefix_move.size()); 
         }
 
         std::string getMoveSource() const { 
 
 			if (not isMoveSymbol()) throw std::runtime_error("Module Symbol: " + name + " is not a module append symbol");						
-			return name.substr(name.find("_TO_")+4);
+			return name.substr(name.find("_FROM_")+6);
         }
         
 		std::string name;
@@ -411,8 +411,7 @@ int main(int argc, char *argv[]) {
 					
 					if (moveDirectives.count(source) and moveDirectives[source] != target) throw std::runtime_error("Module symbols can not be send to more than one target: (" + source + " -> " + target + ")" );
 					if (modules.count(source)==0) throw std::runtime_error("Unknown source module: " + source );
-					if (modules.count(target)==0) throw std::runtime_error("Unknown target module: " + target );
-
+					
 					moveDirectives[source] = target;
 				}
 			}
@@ -423,8 +422,10 @@ int main(int argc, char *argv[]) {
 			if (moveDirectives.count(md.second)) 
 				throw std::runtime_error("Moving symbols functionality does not support chains (yet)" );
 			
-			for (auto &mp : modules[md.first])
+			for (auto &mp : modules[md.first]) {
+				Log(3) << "Moving module: " << mp.name << " to " << md.second;
 				modules[md.second].push_back(mp);
+			}
 			modules.erase(md.first);
 		}
 	}
