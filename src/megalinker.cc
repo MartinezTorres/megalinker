@@ -481,6 +481,13 @@ int main(int argc, char *argv[]) {
 						
 						if (modules.count(requiredModule)==0) throw std::runtime_error("Module: " + module.name + " requires unknown module: " + requiredModule );
 
+						for (auto &m : modules[requiredModule]) {
+							if (m.enabled == false) {
+								m.enabled = true;
+								updated = true;
+							}
+						}
+
 						continue;
 					}
 					
@@ -692,6 +699,9 @@ int main(int argc, char *argv[]) {
 				}
 			}
 		}
+
+		megalinkerSymbols["___ML_CONFIG_INIT_RAM_END"] = ram_ptr;
+		megalinkerSymbols["___ML_CONFIG_INIT_RAM_SIZE"] = ram_ptr - megalinkerSymbols["___ML_CONFIG_INIT_RAM_START"];
 	}
 
 	// ALLOCATE BANKABLE CODE AREAS
@@ -718,9 +728,10 @@ int main(int argc, char *argv[]) {
 
 		std::vector<uint32_t> segments;
 		segments.push_back(std::max(0U, 0x6000-rom_ptr));
-		segments.push_back(std::max(0U, 0x8000-rom_ptr));
-		segments.push_back(std::max(0U, 0xA000-rom_ptr));
-		segments.push_back(std::max(0U, 0xC000-rom_ptr));
+		if (segments.back()==0) segments.push_back(std::max(0U, 0x8000-rom_ptr));
+		if (segments.back()==0) segments.push_back(std::max(0U, 0xA000-rom_ptr));
+		if (segments.back()==0) segments.push_back(std::max(0U, 0xC000-rom_ptr));
+		if (segments.back()==0) throw std::runtime_error("Header too large");
 				
 		for (auto& [size, name]: bankableModules) {
 			
@@ -944,6 +955,8 @@ int main(int argc, char *argv[]) {
 							} else if (module.symbols[idx].isSegmentSymbol()) {
 								
 								std::string requestedModule = module.symbols[idx].getSegmentName();
+								Log(3) << "Requested symbol: " << requestedModule;
+								
 								address = modules[requestedModule].front().segment;
 								
 								Log(2) << "Current area: " << module.areas[current_area].name << " (" << module.page << ") is loading " << module.symbols[idx].name << " (" << modules[requestedModule].front().page << ")" ;

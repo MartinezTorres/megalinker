@@ -1,0 +1,1 @@
+../../util/crt0.megalinker.s

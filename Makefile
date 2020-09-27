@@ -3,7 +3,7 @@
 
 megalinker: src/megalinker.cc
 	@echo "\033[1;32m[$(@)]\033[1;31m\033[0m"
-	@$(CXX) -o $@ $< -std=c++17 -O3 -Wall -Werror -Wextra -pedantic 
+	@$(CXX) -o $@ $< -std=c++17 -O0 -g -Wall -Werror -Wextra -pedantic 
 
 megalinker.exe: src/megalinker.cc
 	@echo "\033[1;32m[$(@)]\033[1;31m\033[0m"
