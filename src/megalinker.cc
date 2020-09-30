@@ -313,7 +313,7 @@ void preprocessModule(Module &module) {
 
 int main(int argc, char *argv[]) {
 	
-	Log::reportLevel(3);
+	Log::reportLevel(10);
 	
 	std::string romName = "out.rom";
 	std::map<std::string, std::vector<Module>> modules;
