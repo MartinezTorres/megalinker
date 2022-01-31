@@ -191,6 +191,8 @@ struct Module {
 		uint32_t absoluteAddress;
 	};
 	
+	int version = -1;
+	
 	std::string filename, name, content;
 	std::vector<Area> areas;
 	std::vector<Symbol> symbols;
@@ -238,6 +240,13 @@ void preprocessModule(Module &module) {
 		isl >> type;
 
 		if (type=="XL2") { // HEADER
+			
+			module.version = 2;
+
+		} else if (type=="XL3") {
+			
+			module.version = 3;
+			
 		} else if (type=="M") {
 			
 			// The module name is implicitly declared.
@@ -306,6 +315,7 @@ void preprocessModule(Module &module) {
 	}
 
 	if (module.name.empty()) throw std::runtime_error("Module not given a name, and we could not determine a name for it: " + module.filename);
+	if (module.version < 0) throw std::runtime_error("Object format not recognized.");
 }
 
 
@@ -409,7 +419,7 @@ int main(int argc, char *argv[]) {
 				if (!isf) throw std::runtime_error("library terminates before reading entire file");
 				
 				
-				if (module.content.size()>10 and module.content.substr(0,3)=="XL2") {
+				if (module.content.size()>10 and module.content.substr(0,2)=="XL") {
 					
 					preprocessModule(module);
 					if (modules.count(module.name)) throw std::runtime_error("File " + arg + " declares a module already defined in: " + modules[module.name].front().filename);
@@ -904,6 +914,7 @@ int main(int argc, char *argv[]) {
 				isl >> type;
 
 				if (type=="XL2") { // HEADER
+				} else if (type=="XL3") { // NOT HERE
 				} else if (type=="M") { // NOT HERE
 				} else if (type=="O") { // NOT NEEDED
 				} else if (type=="H") { // NOT NEEDED
@@ -911,8 +922,14 @@ int main(int argc, char *argv[]) {
 				} else if (type=="A") { // NOT HERE
 				} else if (type=="T") { // HERE
 					
-					uint32_t xx0, xx1;
+					uint32_t xx0, xx1, xx2;
 					isl >> HEX(xx0,HEX::TWO_NIBBLES) >> HEX(xx1,HEX::TWO_NIBBLES);
+					
+					if (module.version==3) {
+						isl >> HEX(xx2,HEX::TWO_NIBBLES);
+						if (xx2 != 0) throw std::runtime_error("We don't support sdcc explicit banking");
+					}
+					
 					last_t_pos = xx1*0x100 + xx0;
 					
 					T.clear();
@@ -927,7 +944,10 @@ int main(int argc, char *argv[]) {
 					current_area = aa1*0x100 + aa0;
 
 					uint32_t n1, n2, xx0, xx1;
+					
 					uint32_t n2Adjust = 2;
+					if (module.version==3) n2Adjust = 3;
+										
 					while (isl >> HEX2(n1) >> HEX2(n2) >> HEX2(xx0) >> HEX2(xx1)) {
 
 						enum { 
@@ -995,11 +1015,18 @@ int main(int argc, char *argv[]) {
 							for (uint32_t i=n2+1; i<T.size(); i++) 
 								T[i-1] = T[i];
 							T.pop_back();
+							n2Adjust++;
+							
+							if (module.version==3) {
+								for (uint32_t i=n2+1; i<T.size(); i++) 
+									T[i-1] = T[i];
+								T.pop_back();								
+								n2Adjust++;
+							}
 
 							T[n2+0] = address & 0xFF;
 							
-							n2Adjust++;
-
+							
 						} else if (n1 == R3_BYTE + R3_BYTX + R3_MSB) {
 							
 							address += T[n2+0] + T[n2+1]*0x100;
@@ -1007,11 +1034,16 @@ int main(int argc, char *argv[]) {
 							for (uint32_t i=n2+1; i<T.size(); i++) 
 								T[i-1] = T[i];
 							T.pop_back();
-
-							T[n2+0] = (address>>8) & 0xFF;
-							
 							n2Adjust++;
 
+							if (module.version==3) {
+								for (uint32_t i=n2+1; i<T.size(); i++) 
+									T[i-1] = T[i];
+								T.pop_back();								
+								n2Adjust++;
+							}
+
+							T[n2+0] = (address>>8) & 0xFF;
 
 						} else {
 							Log(3) << "N1: 0x"<< std::hex << n1 << std::dec;
