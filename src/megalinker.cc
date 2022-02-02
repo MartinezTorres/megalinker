@@ -528,9 +528,36 @@ int main(int argc, char *argv[]) {
 			}
 		}
 		
-		for (auto &ref : referencedSymbols)
-			if (ref.second==0)
-				throw std::runtime_error("Referenced Symbol: " + ref.first + " not defined");
+		for (auto &ref : referencedSymbols) {
+
+			if (ref.second==0) {
+
+				std::string errorString = std::string("Referenced Symbol: ") + ref.first + " not defined. Required by the following modules: ";
+
+				for (auto &mp : modules) {
+					for (auto &module : mp.second) {
+						
+						if (not module.enabled) continue;
+						
+						for (auto &sym : module.symbols) {
+							
+							if (sym.name != ref.first) continue;
+							
+							if (sym.type != Module::Symbol::REF) continue;
+							
+							if (sym.isConfigurationSymbol()) continue;
+							
+							if (sym.isSegmentSymbol()) continue;
+							
+							errorString += module.name;
+							errorString += " ";
+						}
+					}
+				}				
+
+				throw std::runtime_error(errorString);
+			}
+		}
 				
 		if (not updated) break;
 	}
