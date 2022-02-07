@@ -200,13 +200,14 @@ struct Module {
 	bool enabled = false;
 	int page = -1;
 	int segment = 0;
+	bool has_cabs_areas = false;
 };
 
 // preprocessModule makes a 1st pass scan through the REL file of a module.
 // It determines the module name, its symbols, and its areas.
 void preprocessModule(Module &module) {
 
-	const std::set<std::string> known_areas = { 
+	std::set<std::string> known_areas = { 
 		"_HEADER0",     // Fixed to segment 0, contains megarom initialization
 		"_CODE",        // Banked code and const data
 		"_DATA",        // Ram that does not need initialization
@@ -215,7 +216,8 @@ void preprocessModule(Module &module) {
 		"_GSFINAL",     // After code is initialized, it only remains to call main,
 		"_INITIALIZED", // RAM that must be initialized
 		"_INITIALIZER", // Contents to initialize RAM, sits in segment 0
-		"_HOME"         // Non banked code that will be copied to RAM on initialization
+		"_HOME",        // Non banked code that will be copied to RAM on initialization
+		"_CABS#"        // ROM segment at a fixed address
 	};
 	
 	std::istringstream isf(module.content);
@@ -298,8 +300,18 @@ void preprocessModule(Module &module) {
 			} else throw std::runtime_error("Unexpected flag");
 			
 			
-			if (area.size>0) Log(1) << "Found area: " << area.name << " of size: " << area.size;
-			if (area.size>0 and known_areas.count(area.name) == 0) throw std::runtime_error("Area " + area.name +" unknown");
+			if (area.size>0) {
+				
+				Log(1) << "Found area: " << area.name << " of size: " << area.size;
+				
+				if (area.name.substr(0,5) == "_CABS") {
+					known_areas.insert(area.name);
+					module.has_cabs_areas = true;
+				}
+				
+				if (known_areas.count(area.name) == 0) 
+					throw std::runtime_error("Area " + area.name +" unknown");
+			}
 			
 			// NOTE: if the _HEADER0 area is defined, the module must be enabled. Other modules will be enabled on demand.
 			if (area.name=="_HEADER0") module.enabled=true;
@@ -748,6 +760,20 @@ int main(int argc, char *argv[]) {
 		for (auto &mp : modules) {
 			bankableModules.emplace_back(0,mp.first);
 			for (auto &module : mp.second) {
+
+				for (auto &area:  module.areas) {
+					if (area.name.substr(0,5)!="_CABS") continue;
+					if (area.size==0) continue;
+					if (module.page<0) throw std::runtime_error(module.name + " used but not allocated a page");
+					if (area.type != Module::Area::ABSOLUTE) throw std::runtime_error(area.name + " not absolute CABS section in: " + module.filename);
+					
+					if (bankableModules.back().first > (area.addr % 0x2000)) 
+						throw std::runtime_error("Overlapping CABS sections in: " + module.filename);
+					
+					bankableModules.back().first = (area.addr % 0x2000) + area.size;
+				}
+
+
 				for (auto &area:  module.areas) {
 					if (area.name!="_CODE") continue;
 					if (area.size==0) continue;
@@ -756,6 +782,11 @@ int main(int argc, char *argv[]) {
 					
 					bankableModules.back().first += area.size;
 				}
+
+				
+				// If we have CABS areas we reserve an entire segment.
+				if (module.has_cabs_areas)
+					bankableModules.back().first = std::max(bankableModules.back().first, 0x2000U);
 			}		
 			if (bankableModules.back().first>0x2000) throw std::runtime_error("Module " + mp.first + " too large to fit a segment");
 		}
@@ -779,6 +810,32 @@ int main(int argc, char *argv[]) {
 
 			for (auto &module : modules[name]) {
 				module.segment = i;
+				
+				for (auto &area:  module.areas) {
+					if (area.name.substr(0,5)!="_CABS") continue;
+					if (area.size==0) continue;
+
+					for (auto &symbol : module.symbols) {
+						if (symbol.type != Module::Symbol::DEF) continue;
+						if (symbol.areaName != area.name) continue;
+						
+						symbol.addr -= area.addr;
+					}
+							
+
+					//area.addr = 0x2000*(2+module.page) + 0x2000 - segments[i]; 
+					
+					Log(3) << "Addr: " << area.addr << " " << area.size;
+					
+					Log(3) << "Addr check: " << area.addr << " = " << 0x2000*(2+module.page)+(area.addr % 0x2000);
+					
+					area.rom_addr = 0x2000*(2+i) + (area.addr % 0x2000);
+
+					segments[i] = 0x2000 - (area.addr % 0x2000) - area.size;
+
+					Log(2) << "Module: " << module.name << " addressed at: 0x" << std::hex << area.addr << std::dec << " (" << area.size << " bytes) in page: " << module.page << " and segment " << module.segment;
+				}
+				
 				for (auto &area:  module.areas) {
 					if (area.name != "_CODE") continue;
 
@@ -926,8 +983,10 @@ int main(int argc, char *argv[]) {
 				} else {
 					if (area.size)
 						Log(3) << "Module: " << module.name << " Area: " << area.name << " " << area.addr << " " << area.rom_addr;
+//					area_addr.push_back(area.addr); 
+					area_rom_addr.push_back(area.rom_addr & 0xFFFFE000); 
 					area_addr.push_back(0);
-					area_rom_addr.push_back(0);
+//					area_rom_addr.push_back(0);
 				}
 			}
 				
@@ -999,6 +1058,9 @@ int main(int argc, char *argv[]) {
 							if (symbolsAddress.count(module.symbols[idx].name)!=0)  {
 
 								address = symbolsAddress[module.symbols[idx].name];
+								
+								Log(3) << std::hex << "Symbol: " << module.symbols[idx].name << " is in: " << address;
+								
 							} else if (module.symbols[idx].isSegmentSymbol()) {
 								
 								std::string requestedModule = module.symbols[idx].getSegmentName();
@@ -1078,12 +1140,16 @@ int main(int argc, char *argv[]) {
 						}
 					}	
 
+					if (last_t_pos > 0x2000) {
+						Log(4) << "XX " << current_area << " " << std::hex << last_t_pos << " " << area_rom_addr[current_area] << std::dec;
+					}
+
 
 					if (T.size())
 						while (rom.size() < last_t_pos + area_rom_addr[current_area] - 0x4000 + T.size()) 
 							rom.resize(rom.size()+0x2000,0xff);
 
-					for (auto &t : T) rom[area_rom_addr[current_area] - 0x4000 + last_t_pos++] = t;
+					for (auto &t : T) rom[area_rom_addr[current_area] - 0x4000 + ((last_t_pos++) % 0x2000)] = t;
 
 				} else if (not type.empty()) {
 					
