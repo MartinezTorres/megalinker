@@ -389,8 +389,13 @@ int main(int argc, char *argv[]) {
 			module.content = buffer.str();
 			
 			preprocessModule(module);
-			if (modules.count(module.name)) throw std::runtime_error("File " + arg + " declares a module already defined in: " + modules[module.name].front().filename);
-			modules[module.name].push_back(module);
+			if (modules.count(module.name) == 0) {
+
+				modules[module.name].push_back(module);
+
+			} else if (modules[module.name].front().filename != module.filename) {
+				throw std::runtime_error("File " + arg + " declares a module already defined in: " + modules[module.name].front().filename);
+			}
 
 		} else if (arg.substr(arg.find_last_of(".")) == ".lib") {	
 
