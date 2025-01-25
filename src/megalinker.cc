@@ -13,6 +13,7 @@
 #include <vector>
 #include <functional>
 #include <algorithm>
+#include <cstdint>
 
 namespace { // MiniLog
 	class Log {
@@ -248,7 +249,11 @@ void preprocessModule(Module &module) {
 		} else if (type=="XL3") {
 			
 			module.version = 3;
+
+		} else if (type=="XL4") {
 			
+			module.version = 4;
+
 		} else if (type=="M") {
 			
 			// The module name is implicitly declared.
@@ -1006,6 +1011,7 @@ int main(int argc, char *argv[]) {
 
 				if (type=="XL2") { // HEADER
 				} else if (type=="XL3") { // NOT HERE
+				} else if (type=="XL4") { // NOT HERE
 				} else if (type=="M") { // NOT HERE
 				} else if (type=="O") { // NOT NEEDED
 				} else if (type=="H") { // NOT NEEDED
@@ -1013,14 +1019,21 @@ int main(int argc, char *argv[]) {
 				} else if (type=="A") { // NOT HERE
 				} else if (type=="T") { // HERE
 					
-					uint32_t xx0, xx1, xx2;
+					uint32_t xx0, xx1, xx2, xx3;
 					isl >> HEX(xx0,HEX::TWO_NIBBLES) >> HEX(xx1,HEX::TWO_NIBBLES);
 					
 					if (module.version==3) {
 						isl >> HEX(xx2,HEX::TWO_NIBBLES);
 						if (xx2 != 0) throw std::runtime_error("We don't support sdcc explicit banking");
 					}
-					
+
+					if (module.version==4) {
+						isl >> HEX(xx2,HEX::TWO_NIBBLES);
+						if (xx2 != 0) throw std::runtime_error("We don't support sdcc explicit banking");
+						isl >> HEX(xx3,HEX::TWO_NIBBLES);
+						if (xx3 != 0) throw std::runtime_error("We don't support sdcc explicit banking");
+					}
+
 					last_t_pos = xx1*0x100 + xx0;
 					
 					T.clear();
@@ -1038,6 +1051,7 @@ int main(int argc, char *argv[]) {
 					
 					uint32_t n2Adjust = 2;
 					if (module.version==3) n2Adjust = 3;
+					if (module.version==4) n2Adjust = 4;
 										
 					while (isl >> HEX2(n1) >> HEX2(n2) >> HEX2(xx0) >> HEX2(xx1)) {
 
@@ -1118,6 +1132,14 @@ int main(int argc, char *argv[]) {
 								n2Adjust++;
 							}
 
+							if (module.version==4) {
+								for (uint32_t i=n2+2; i<T.size(); i++) 
+									T[i-2] = T[i];
+								T.pop_back();								
+								T.pop_back();								
+								n2Adjust+=2;
+							}
+
 							T[n2+0] = address & 0xFF;
 							
 							
@@ -1135,6 +1157,14 @@ int main(int argc, char *argv[]) {
 									T[i-1] = T[i];
 								T.pop_back();								
 								n2Adjust++;
+							}
+
+							if (module.version==4) {
+								for (uint32_t i=n2+2; i<T.size(); i++) 
+									T[i-2] = T[i];
+								T.pop_back();								
+								T.pop_back();								
+								n2Adjust+=2;
 							}
 
 							T[n2+0] = (address>>8) & 0xFF;
